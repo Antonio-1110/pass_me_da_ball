@@ -79,6 +79,7 @@ class MachineController:
     def tick(self, now: float, dt: float, frame_id: Optional[int] = None,
              t_frame: Optional[float] = None, pan_error_deg: Optional[float] = None,
              distance_m: Optional[float] = None, reliable: bool = False) -> None:
+        self.launcher.reload_delay_s = self.cfg.app.reload_delay_s   # live-tunable
         if frame_id is not None and t_frame is not None:
             self.turret.observe(frame_id, t_frame, pan_error_deg, distance_m, reliable)
         if self.pending is not None:

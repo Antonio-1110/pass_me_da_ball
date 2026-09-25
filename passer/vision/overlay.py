@@ -21,7 +21,9 @@ def _pt(p) -> tuple:
     return int(p[0]), int(p[1])
 
 
-def draw(st: TrackingState, lines: Iterable[str] = (), mirror: bool = False) -> np.ndarray:
+def draw(st: TrackingState, lines: Iterable[str] = (), mirror: bool = False,
+         text: bool = True) -> np.ndarray:
+    """Boxes, ROI, skeletons and (optionally) the text readout on the lores frame."""
     img = st.frame.lores.copy()
     for b in st.all_boxes:
         cv2.rectangle(img, _pt((b.x1, b.y1)), _pt((b.x2, b.y2)), (90, 90, 90), 1)
@@ -44,7 +46,11 @@ def draw(st: TrackingState, lines: Iterable[str] = (), mirror: bool = False) -> 
     cv2.line(img, (w // 2, 0), (w // 2, h), (60, 60, 200), 1)
     if mirror:
         img = cv2.flip(img, 1)
+    return add_text(img, st, lines) if text else img
 
+
+def add_text(img: np.ndarray, st: TrackingState, lines: Iterable[str] = ()) -> np.ndarray:
+    """Text readout for the local preview window (the dashboard has its own)."""
     text: List[str] = [
         f"infer {st.infer_fps:4.1f} fps  det {st.infer_ms:4.0f} ms  gest {st.gesture_ms:4.0f} ms",
         "dist " + (f"{st.distance_m:4.1f} m" if st.distance_m else "  -- ")

@@ -174,6 +174,11 @@ class TwoAxisTurret:
 
     # -- control ---------------------------------------------------------------
     def update(self, now: float, dt: float) -> None:
+        # Limits are re-read every tick so they can be tuned live.
+        self.cam_profile.vmax = self.cam_cfg.max_speed_dps
+        self.cam_profile.amax = self.cam_cfg.max_accel_dps2
+        self.lau_profile.vmax = self.lau_cfg.max_speed_dps
+        self.lau_profile.amax = self.lau_cfg.max_accel_dps2
         if self.estimator.stale(now):
             self.estimator.reset()
 

@@ -175,6 +175,7 @@ class VisionPipeline:
             t0 = time.monotonic()
 
             lh, lw = fp.lores.shape[:2]
+            self.distance.hfov_deg = self.cfg.camera.hfov_deg   # live-tunable
             boxes = self.detector.detect(fp.lores)
             box = self.tracker.update(boxes)
 

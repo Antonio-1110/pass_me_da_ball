@@ -13,7 +13,9 @@ configs/macbook.yaml.
 
 from __future__ import annotations
 
+import copy
 import dataclasses
+import math
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
@@ -293,6 +295,22 @@ class AppConfig:
 
 
 @dataclass
+class WebConfig:
+    """Browser dashboard: live camera view, status, and live config editing."""
+    enabled: bool = True
+    host: str = "0.0.0.0"            # reachable from other devices on the LAN
+    port: int = 8080
+    stream_fps: float = 15.0         # MJPEG preview rate (costs CPU on the Pi)
+    jpeg_quality: int = 70
+    # Fire buttons in the dashboard. Always available in dry run; in LIVE mode
+    # only if this is true (anyone on the network could otherwise fire it).
+    allow_fire_live: bool = False
+    # Optional shared secret: open http://pi:8080/?token=... once; empty = no check.
+    token: str = ""
+    save_path: str = "configs/live.yaml"  # where "Save" writes the tuned settings
+
+
+@dataclass
 class Config:
     camera: CameraConfig = field(default_factory=CameraConfig)
     detector: DetectorConfig = field(default_factory=DetectorConfig)
@@ -305,34 +323,175 @@ class Config:
     launcher: LauncherConfig = field(default_factory=LauncherConfig)
     ps100: PS100Config = field(default_factory=PS100Config)
     app: AppConfig = field(default_factory=AppConfig)
+    web: WebConfig = field(default_factory=WebConfig)
 
 
 # ---------------------------------------------------------------------------
 # Loading
 # ---------------------------------------------------------------------------
+def _coerce(current: Any, value: Any, where: str) -> Any:
+    """
+    Check/convert `value` to the type of the existing `current` value, so a
+    typo in YAML or a bad value from the web UI fails loudly instead of
+    silently breaking the running machine.
+    """
+    def bad(expected):
+        raise TypeError(f"{where}: expected {expected}, got {value!r}")
+
+    if isinstance(current, bool):
+        if not isinstance(value, bool):
+            bad("true/false")
+        return value
+    if isinstance(current, (int, float)):
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            bad("a number")
+        if not math.isfinite(value):
+            bad("a finite number")
+        if isinstance(current, int):
+            if float(value) != int(value):
+                bad("a whole number")
+            return int(value)
+        return float(value)
+    if isinstance(current, str):
+        if not isinstance(value, str):
+            bad("text")
+        return value
+    if isinstance(current, tuple):
+        if not isinstance(value, (list, tuple)) or len(value) != len(current):
+            bad(f"a list of {len(current)} values")
+        return tuple(_coerce(c, v, f"{where}[{i}]") for i, (c, v) in enumerate(zip(current, value)))
+    if isinstance(current, dict) and not isinstance(value, dict):
+        bad("a mapping")
+    return value  # None-default (optional) fields accept anything
+
+
+def _check_speed_table(value: Any, where: str) -> dict:
+    if not isinstance(value, dict):
+        raise TypeError(f"{where}: expected {{profile: [[distance, multiplier], ...]}}")
+    out = {}
+    for prof, pts in value.items():
+        if not isinstance(pts, (list, tuple)):
+            raise TypeError(f"{where}.{prof}: expected a list of [distance, multiplier]")
+        out[prof] = [[_coerce(0.0, p[0], f"{where}.{prof}"), _coerce(0.0, p[1], f"{where}.{prof}")]
+                     if isinstance(p, (list, tuple)) and len(p) == 2
+                     else _coerce((0.0, 0.0), p, f"{where}.{prof}") for p in pts]
+    return out
+
+
 def _merge(obj: Any, data: dict, path: str = "") -> Any:
-    """Recursively apply a dict of overrides onto a dataclass instance."""
+    """Recursively apply a dict of overrides onto a dataclass instance (type-checked)."""
+    if not isinstance(data, dict):
+        raise TypeError(f"{path or 'config'}: expected a mapping, got {data!r}")
     for key, value in data.items():
         where = f"{path}.{key}" if path else key
         if not hasattr(obj, key):
             raise KeyError(f"Unknown config key: {where}")
         current = getattr(obj, key)
-        if dataclasses.is_dataclass(current) and isinstance(value, dict):
+        if dataclasses.is_dataclass(current):
             _merge(current, value, where)
-        elif key == "profiles" and isinstance(value, dict):
+        elif key == "profiles":
+            if not isinstance(value, dict):
+                raise TypeError(f"{where}: expected a mapping of profiles")
             profiles = dict(current)
             for name, prof in value.items():
-                base = profiles.get(name)
-                if base is None:
-                    profiles[name] = PassProfile(**prof)
-                else:
-                    profiles[name] = dataclasses.replace(base, **prof)
+                base = profiles.get(name) or PassProfile(launch_angle_deg=0.0, target_height_m=0.0)
+                profiles[name] = _merge(dataclasses.replace(base), prof, f"{where}.{name}")
             setattr(obj, key, profiles)
-        elif isinstance(current, tuple) and isinstance(value, (list, tuple)):
-            setattr(obj, key, tuple(value))
+        elif key == "speed_table":
+            setattr(obj, key, _check_speed_table(value, where))
         else:
-            setattr(obj, key, value)
+            setattr(obj, key, _coerce(current, value, where))
     return obj
+
+
+def apply_overrides(cfg: "Config", data: dict) -> None:
+    """
+    Apply a partial update to a LIVE config: validated on a copy first, so
+    either every value is applied or none is. Nested sections are mutated in
+    place, so modules holding a reference to e.g. cfg.launcher see the change.
+    """
+    _merge(copy.deepcopy(cfg), data)
+    _merge(cfg, data)
+
+
+def to_dict(obj: Any) -> Any:
+    """Config (or any part of it) as plain dicts/lists, e.g. for JSON/YAML."""
+    if dataclasses.is_dataclass(obj):
+        return {f.name: to_dict(getattr(obj, f.name)) for f in dataclasses.fields(obj)}
+    if isinstance(obj, dict):
+        return {k: to_dict(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [to_dict(v) for v in obj]
+    return obj
+
+
+def diff(current: dict, base: dict) -> dict:
+    """Only the entries of `current` that differ from `base` (recursively)."""
+    out = {}
+    for k, v in current.items():
+        b = base.get(k) if isinstance(base, dict) else None
+        if isinstance(v, dict) and isinstance(b, dict) and k != "speed_table":
+            d = diff(v, b)
+            if d:
+                out[k] = d
+        elif v != b:
+            out[k] = v
+    return out
+
+
+def save_config(cfg: "Config", path: str | Path) -> dict:
+    """Write everything that differs from the defaults to a YAML file."""
+    import yaml
+
+    changed = diff(to_dict(cfg), to_dict(Config()))
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8") as f:
+        f.write("# Saved from the web dashboard: only values that differ from the defaults.\n")
+        yaml.safe_dump(changed, f, sort_keys=False)
+    return changed
+
+
+def field_docs() -> dict:
+    """
+    {"section.field": "help text"} taken from the comments in this file
+    (trailing `# ...` on the field line, or the comment block right above
+    it), so the web UI shows the same help text as the source.
+    """
+    import inspect
+    import re
+
+    field_pat = re.compile(r"^\s+(\w+)\s*:\s*[^#=]+(?:=[^#]*?)?(?:#\s*(.*))?$")
+    comment_pat = re.compile(r"^\s+#\s?(.*)$")
+    docs: dict = {}
+
+    def walk(obj: Any, prefix: str) -> None:
+        try:
+            src = inspect.getsource(type(obj))
+        except (OSError, TypeError):  # pragma: no cover
+            return
+        pending: list = []
+        for line in src.splitlines():
+            c = comment_pat.match(line)
+            if c:
+                pending.append(c.group(1).strip())
+                continue
+            m = field_pat.match(line)
+            if m:
+                text = m.group(2) or " ".join(pending)
+                if text:
+                    docs[f"{prefix}{m.group(1)}"] = text.strip()
+            pending = []
+        for f in dataclasses.fields(obj):
+            v = getattr(obj, f.name)
+            if dataclasses.is_dataclass(v):
+                walk(v, f"{prefix}{f.name}.")
+
+    root = Config()
+    for f in dataclasses.fields(root):
+        walk(getattr(root, f.name), f"{f.name}.")
+    walk(PassProfile(launch_angle_deg=0.0, target_height_m=0.0), "profile.")
+    return docs
 
 
 def load_config(path: Optional[str | Path] = None, overrides: Optional[dict] = None) -> Config:

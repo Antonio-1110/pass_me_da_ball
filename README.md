@@ -33,6 +33,7 @@ and sweep worked out from the distance to the catch point.
 | `passer/prediction.py` | Kalman filter on the player's floor position and velocity, plus a bearing filter for the camera |
 | `passer/aiming.py` | Where the launcher points: predicted catch point (fire latency + flight time) plus gesture lead |
 | `passer/hardware/pan_axis.py` | **Plug-in point for the camera servo and the launcher stepper** |
+| `passer/web/` | Browser dashboard: live camera view, status, live settings, launch preview |
 | `passer/physics.py` | Ball flight with gravity and air drag; solves the launch speed to reach a catch point |
 | `passer/kinematics.py` | Arm model (arm length → release point and ball speed), calibration layer, PS100 registers |
 | `passer/calibration.py` | Fits the sim-to-real corrections from test shots |
@@ -57,7 +58,7 @@ sudo apt install -y python3-picamera2 python3-opencv
 python3 -m venv --system-site-packages .venv && . .venv/bin/activate
 pip install -r requirements-pi.txt
 yolo export model=yolov8n.pt format=ncnn imgsz=320     # optional, 3-4x faster; then set detector.yolo_model
-python -m passer.app --config configs/rpi.yaml --headless          # dry run
+python -m passer.app --config configs/rpi.yaml --headless          # dry run; dashboard on :8080
 python -m passer.app --config configs/rpi.yaml --headless --live   # REALLY moves the arm
 ```
 
@@ -65,6 +66,22 @@ Other flags: `--video clip.mp4` replays a recording through the whole stack.
 Preview keys: `q` quit, `c` / `b` manual chest / lob, `r` clear a launcher fault, `s` stop the drive.
 
 **Tests** (no camera or models needed): `pip install -r requirements-dev.txt && pytest`
+
+## Dashboard
+
+While the app runs it serves a dashboard at `http://<pi-address>:8080/`. Open
+it from a phone or laptop on the same network. `--port` changes the port and
+`--no-web` turns it off.
+
+- **Camera:** live view with the player box, gesture crop and skeleton. Frames are only drawn and encoded while someone is watching.
+- **Status:** distance, bearing and speed, gesture progress, both turret axes, arm state, frame rates.
+- **Launch preview:** pick a distance and pass type to see ball speed, motor rpm, register values and warnings, computed with the current settings.
+- **Settings:** every config value, with help text taken from `config.py`. Changes apply to the running machine straight away and are type-checked (a bad value is rejected and nothing is half-applied). Changed values are highlighted, with a reset to default. **Save** writes everything that differs from the defaults to `configs/live.yaml`; start with `--config configs/live.yaml` to reuse it.
+  - Settings read only at startup (camera resolution, model files, serial port, axis backends) show a **restart** tag.
+  - `app.dry_run` and the dashboard's own safety settings are **locked**: switching to LIVE is done on the machine with `--live`.
+- **Actions:** chest, lob, pass left/right, stop drive, reset fault. The fire buttons only work in dry run, unless `web.allow_fire_live: true` is set in the config file. They also ask for confirmation in LIVE. Stop always works.
+
+**Security:** there is no login, so anyone who can reach the port can change settings. Keep the Pi on a private network or set `web.token`, then open `/?token=...` once. The server only accepts JSON POSTs, which stops other websites from triggering actions through your browser.
 
 ## Gestures
 

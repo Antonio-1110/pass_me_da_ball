@@ -1,0 +1,477 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Passer Control</title>
+<link rel="icon" href="data:,">
+<style>
+:root {
+  --bg: #f4f5f7; --panel: #ffffff; --panel-2: #f0f2f5; --text: #1b1f24; --muted: #5f6b7a;
+  --border: #d9dee5; --accent: #d9480f; --accent-2: #fff0e8; --ok: #2b8a3e; --warn: #b7791f;
+  --bad: #c92a2a; --live: #c92a2a; --dry: #1971c2; --input: #ffffff; --shadow: 0 1px 2px rgba(0,0,0,.06);
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #111418; --panel: #1a1f25; --panel-2: #222830; --text: #e6e9ed; --muted: #8b96a5;
+    --border: #2d353f; --accent: #ff7a3d; --accent-2: #3a2418; --ok: #51cf66; --warn: #fcc419;
+    --bad: #ff6b6b; --live: #ff6b6b; --dry: #4dabf7; --input: #12161b; --shadow: none;
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text);
+  font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+header { display: flex; align-items: center; gap: 12px; padding: 10px 16px;
+  border-bottom: 1px solid var(--border); background: var(--panel); position: sticky; top: 0; z-index: 5; }
+header h1 { font-size: 16px; margin: 0; letter-spacing: .2px; }
+.badge { font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 99px; letter-spacing: .4px; }
+.badge.dry { background: var(--dry); color: #fff; }
+.badge.live { background: var(--live); color: #fff; }
+.conn { margin-left: auto; font-size: 12px; color: var(--muted); display: flex; align-items: center; gap: 6px; }
+.dot { width: 8px; height: 8px; border-radius: 50%; background: var(--bad); }
+.dot.on { background: var(--ok); }
+main { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr); gap: 16px; padding: 16px;
+  max-width: 1500px; margin: 0 auto; }
+@media (max-width: 900px) { main { grid-template-columns: 1fr; padding: 12px; } }
+section.card { background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
+  box-shadow: var(--shadow); margin-bottom: 16px; overflow: hidden; }
+.card h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .6px; color: var(--muted);
+  margin: 0; padding: 10px 14px; border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 8px; }
+.card .body { padding: 12px 14px; }
+.video { background: #000; aspect-ratio: 16 / 9; display: flex; align-items: center; justify-content: center; }
+.video img { width: 100%; height: 100%; object-fit: contain; display: block; }
+.video .ph { color: #888; font-size: 13px; }
+.stats { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 10px; }
+.stat { background: var(--panel-2); border-radius: 8px; padding: 8px 10px; min-width: 0; }
+.stat .k { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .4px; }
+.stat .v { font-size: 18px; font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap;
+  overflow: hidden; text-overflow: ellipsis; }
+.stat .s { font-size: 11px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.msg { margin-top: 10px; font-size: 13px; color: var(--muted); min-height: 1.4em; overflow-wrap: anywhere; }
+.actions { display: flex; flex-wrap: wrap; gap: 8px; }
+button { font: inherit; border: 1px solid var(--border); background: var(--panel-2); color: var(--text);
+  padding: 7px 12px; border-radius: 7px; cursor: pointer; }
+button:hover:not(:disabled) { border-color: var(--accent); }
+button:disabled { opacity: .45; cursor: not-allowed; }
+button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+button.danger { background: var(--bad); border-color: var(--bad); color: #fff; }
+button.small { padding: 2px 8px; font-size: 12px; }
+.plan-controls { display: grid; grid-template-columns: 1fr auto; gap: 10px; align-items: center; }
+input[type=range] { width: 100%; accent-color: var(--accent); }
+select, input[type=text], input[type=number], textarea { font: inherit; color: var(--text); background: var(--input);
+  border: 1px solid var(--border); border-radius: 6px; padding: 5px 8px; min-width: 0; }
+textarea { width: 100%; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+.plan-out { margin-top: 10px; }
+.warn { color: var(--warn); font-size: 12px; margin-top: 6px; }
+.bad { color: var(--bad); }
+.okc { color: var(--ok); }
+.cfg-tools { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.cfg-tools input { flex: 1; min-width: 160px; }
+details.sec { border-top: 1px solid var(--border); }
+details.sec > summary { cursor: pointer; padding: 9px 14px; font-weight: 600; list-style: none; display: flex;
+  align-items: center; gap: 8px; }
+details.sec > summary::-webkit-details-marker { display: none; }
+details.sec > summary::before { content: "▸"; color: var(--muted); transition: transform .15s; }
+details.sec[open] > summary::before { transform: rotate(90deg); }
+.count { font-size: 11px; font-weight: 600; color: var(--accent); background: var(--accent-2); padding: 1px 7px;
+  border-radius: 99px; }
+.sub { font-size: 12px; font-weight: 700; color: var(--muted); padding: 10px 14px 2px; text-transform: uppercase;
+  letter-spacing: .5px; }
+.row { display: grid; grid-template-columns: minmax(0, 1fr) 150px; gap: 4px 10px; padding: 7px 14px;
+  align-items: center; }
+.row + .row { border-top: 1px dashed var(--border); }
+.row.modified { background: var(--accent-2); }
+.row .name { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px; overflow-wrap: anywhere; }
+.row .help { grid-column: 1 / -1; font-size: 12px; color: var(--muted); }
+.row .ctl { display: flex; justify-content: flex-end; }
+.row .ctl input[type=text], .row .ctl input[type=number], .row .ctl select { width: 100%; }
+.row.wide { grid-template-columns: 1fr; }
+.row .flags { display: inline-flex; gap: 4px; margin-left: 6px; vertical-align: middle; }
+.flag { font-size: 10px; padding: 0 6px; border-radius: 99px; border: 1px solid var(--border); color: var(--muted);
+  font-family: system-ui, sans-serif; }
+.flag.r { border-color: var(--warn); color: var(--warn); }
+.row .err { grid-column: 1 / -1; color: var(--bad); font-size: 12px; }
+.hidden { display: none !important; }
+#toast { position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%); background: var(--text); color: var(--bg);
+  padding: 8px 14px; border-radius: 8px; font-size: 13px; opacity: 0; transition: opacity .2s; pointer-events: none;
+  max-width: calc(100% - 32px); z-index: 10; }
+#toast.show { opacity: .95; }
+.switch { position: relative; width: 38px; height: 22px; }
+.switch input { opacity: 0; width: 0; height: 0; }
+.switch span { position: absolute; inset: 0; background: var(--border); border-radius: 99px; transition: .15s; cursor: pointer; }
+.switch span::before { content: ""; position: absolute; width: 16px; height: 16px; left: 3px; top: 3px; background: #fff;
+  border-radius: 50%; transition: .15s; }
+.switch input:checked + span { background: var(--accent); }
+.switch input:checked + span::before { transform: translateX(16px); }
+.switch input:disabled + span { opacity: .5; cursor: not-allowed; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Passer Control</h1>
+  <span id="mode" class="badge dry">…</span>
+  <span class="conn"><span id="conn-dot" class="dot"></span><span id="conn-txt">connecting</span></span>
+</header>
+
+<main>
+  <div>
+    <section class="card">
+      <h2>Camera</h2>
+      <div class="video"><img id="video" alt="camera feed"><span id="video-ph" class="ph">waiting for camera…</span></div>
+    </section>
+
+    <section class="card">
+      <h2>Status</h2>
+      <div class="body">
+        <div class="stats" id="stats"></div>
+        <div class="msg" id="message"></div>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>Actions <span id="fire-note" class="flag r hidden">firing disabled in LIVE</span></h2>
+      <div class="body actions">
+        <button class="primary fire" data-action="chest">Chest pass</button>
+        <button class="primary fire" data-action="lob">Lob</button>
+        <button class="fire" data-action="pass_left">Pass left</button>
+        <button class="fire" data-action="pass_right">Pass right</button>
+        <button class="danger" data-action="stop">Stop drive</button>
+        <button data-action="reset">Reset fault</button>
+      </div>
+    </section>
+  </div>
+
+  <div>
+    <section class="card">
+      <h2>Launch preview <span class="flag">uses current settings</span></h2>
+      <div class="body">
+        <div class="plan-controls">
+          <input id="plan-d" type="range" min="1" max="12" step="0.1" value="6" aria-label="distance">
+          <select id="plan-p" aria-label="pass type"></select>
+        </div>
+        <div class="plan-out">
+          <div class="stats" id="plan-stats"></div>
+          <div id="plan-warn"></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>Settings</h2>
+      <div class="body cfg-tools">
+        <input id="filter" type="text" placeholder="Filter settings (e.g. speed, arm, lead)">
+        <button id="save" class="primary">Save</button>
+      </div>
+      <div class="body" style="padding-top:0"><span class="msg" id="save-note" style="margin:0"></span></div>
+      <div id="config"></div>
+    </section>
+  </div>
+</main>
+<div id="toast"></div>
+
+<script>
+"use strict";
+const $ = (s, el = document) => el.querySelector(s);
+const esc = s => String(s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const fmt = (v, d = 1, unit = "") => (v === null || v === undefined || Number.isNaN(v)) ? "–" : Number(v).toFixed(d) + unit;
+const sign = (v, d = 1, unit = "") => (v === null || v === undefined) ? "–" : (v >= 0 ? "+" : "") + Number(v).toFixed(d) + unit;
+
+let CFG = null;          // {values, defaults, docs, restart_required, read_only, save_path}
+let lastStatus = null;
+
+function toast(text, bad = false) {
+  const t = $("#toast");
+  t.textContent = text;
+  t.style.background = bad ? "var(--bad)" : "";
+  t.classList.add("show");
+  clearTimeout(t._h);
+  t._h = setTimeout(() => t.classList.remove("show"), 2600);
+}
+
+async function api(path, body) {
+  const opt = body === undefined ? {} :
+    { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) };
+  const r = await fetch(path, opt);
+  const j = await r.json().catch(() => ({ ok: false, error: r.statusText }));
+  if (!r.ok) throw new Error(j.error || j.message || r.statusText);
+  return j;
+}
+
+/* ---------------- video ---------------- */
+function startVideo() {
+  const img = $("#video"), ph = $("#video-ph");
+  img.onload = () => ph.classList.add("hidden");
+  img.onerror = () => { ph.classList.remove("hidden"); setTimeout(startVideo, 2000); };
+  img.src = "stream.mjpg?t=" + Date.now();
+}
+
+/* ---------------- status ---------------- */
+function stat(k, v, s = "") {
+  return `<div class="stat"><div class="k">${esc(k)}</div><div class="v">${esc(v)}</div><div class="s">${esc(s)}</div></div>`;
+}
+
+function renderStatus(st) {
+  const mode = $("#mode");
+  mode.textContent = st.mode;
+  mode.className = "badge " + (st.dry_run ? "dry" : "live");
+  const p = st.player, g = st.gesture, t = st.turret;
+  const speed = p.velocity ? Math.hypot(p.velocity[0], p.velocity[1]) : null;
+  $("#stats").innerHTML = [
+    stat("Player", p.detected ? "tracked" : "none", p.detected ? `pan error ${sign(p.pan_error_deg)}°` : ""),
+    stat("Distance", fmt(p.distance_m, 2, " m"), p.distance_m == null ? "" : (p.distance_reliable ? "measured" : "held (body cut off)")),
+    stat("Bearing", sign(p.bearing_deg, 1, "°"), speed == null ? "velocity: settling" : `moving ${fmt(speed, 1)} m/s`),
+    stat("Gesture", g.raw, !g.progress_count ? `hand ${g.hand} · pose ${g.pose}`
+      : g.progress_count >= g.confirm_count ? `${g.progress} confirmed`
+      : `${g.progress} ${g.progress_count}/${g.confirm_count}`),
+    stat("Launcher turret", sign(t.launcher_deg, 1, "°"), (t.launcher_target_deg == null ? "holding" : `→ ${sign(t.launcher_target_deg, 1, "°")}`) + (t.launcher_motor ? "" : " · no motor")),
+    stat("Camera servo", sign(t.camera_deg, 1, "°"), `heading ${sign(t.camera_heading_deg, 1, "°")}` + (t.camera_motor ? "" : " · no servo")),
+    stat("Arm", st.launcher.state, st.pending ? `aiming ${st.pending}` : ""),
+    stat("Speed", fmt(st.infer_fps, 1, " fps"), `detect ${fmt(st.infer_ms, 0)} ms · gesture ${fmt(st.gesture_ms, 0)} ms`),
+  ].join("");
+  $("#message").textContent = st.message || "";
+  const allowed = st.fire_allowed;
+  document.querySelectorAll("button.fire").forEach(b => b.disabled = !allowed);
+  $("#fire-note").classList.toggle("hidden", allowed);
+}
+
+async function pollStatus() {
+  try {
+    lastStatus = await api("api/status");
+    renderStatus(lastStatus);
+    $("#conn-dot").classList.add("on");
+    $("#conn-txt").textContent = "connected";
+  } catch (e) {
+    $("#conn-dot").classList.remove("on");
+    $("#conn-txt").textContent = "disconnected";
+  }
+  setTimeout(pollStatus, 250);
+}
+
+document.querySelectorAll("[data-action]").forEach(b => b.addEventListener("click", async () => {
+  const a = b.dataset.action;
+  if (b.classList.contains("fire") && lastStatus && !lastStatus.dry_run &&
+      !confirm(`LIVE mode: really fire a ${a.replace("_", " ")}?`)) return;
+  try { const r = await api("api/action", { action: a }); toast(r.message || a); }
+  catch (e) { toast(e.message, true); }
+}));
+
+/* ---------------- launch preview ---------------- */
+let planTimer = null;
+function schedulePlan() { clearTimeout(planTimer); planTimer = setTimeout(updatePlan, 120); }
+async function updatePlan() {
+  const d = $("#plan-d").value, prof = $("#plan-p").value;
+  if (!prof) return;
+  try {
+    const p = await api(`api/plan?distance=${d}&profile=${encodeURIComponent(prof)}`);
+    $("#plan-stats").innerHTML = [
+      stat("Distance", fmt(d, 1, " m"), p.ok ? "plan OK" : "REJECTED"),
+      stat("Ball speed", fmt(p.exit_velocity_mps, 2, " m/s"), `physics ${fmt(p.physics_speed_mps, 2)}`),
+      stat("Motor", `${p.motor_rpm} rpm`, `arm ${fmt(p.arm_rpm, 1)} rpm`),
+      stat("Registers", `${p.move.turns} / ${p.move.pulses}`, "0x0202 turns / 0x0203 pulses"),
+      stat("Release", fmt(p.release_angle_deg, 1, "°"), `sweep ${fmt(p.sweep_deg, 1)}° · angle ${fmt(p.launch_angle_deg, 0)}°`),
+      stat("Flight", fmt(p.flight_time_s, 2, " s"), `release height ${fmt(p.release_height_m, 2)} m`),
+    ].join("");
+    $("#plan-warn").innerHTML = p.warnings.map(w => `<div class="warn">⚠ ${esc(w)}</div>`).join("");
+  } catch (e) {
+    $("#plan-warn").innerHTML = `<div class="warn bad">${esc(e.message)}</div>`;
+  }
+}
+$("#plan-d").addEventListener("input", schedulePlan);
+$("#plan-p").addEventListener("change", updatePlan);
+
+/* ---------------- settings ---------------- */
+const TITLES = {
+  camera: "Camera", detector: "Person detector", target: "Target lock", gesture: "Gestures",
+  distance: "Distance estimate", camera_axis: "Camera servo", launcher_axis: "Launcher turret",
+  prediction: "Motion prediction", launcher: "Launcher & physics", ps100: "PS100 drive",
+  app: "App", web: "Dashboard",
+};
+const get = (obj, path) => path.reduce((o, k) => (o == null ? undefined : o[k]), obj);
+const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+const matchRule = (path, rules) => { const p = path.split("."); for (let i = 1; i <= p.length; i++) if (rules.includes(p.slice(0, i).join("."))) return true; return false; };
+function nest(path, value) { const o = {}; let cur = o; path.forEach((k, i) => { if (i === path.length - 1) cur[k] = value; else cur = cur[k] = {}; }); return o; }
+
+function docFor(path) {
+  const key = path.join(".");
+  if (path[1] === "profiles" && path.length === 4) return CFG.docs["profile." + path[3]];
+  return CFG.docs[key];
+}
+
+function inputFor(path, value, def, locked) {
+  const id = "f-" + path.join("-");
+  const dis = locked ? "disabled" : "";
+  if (typeof value === "boolean" || typeof def === "boolean")
+    return `<label class="switch"><input id="${id}" type="checkbox" ${value ? "checked" : ""} ${dis}><span></span></label>`;
+  if (typeof value === "number")
+    return `<input id="${id}" type="number" step="any" value="${esc(value)}" ${dis}>`;
+  if (Array.isArray(value))
+    return `<input id="${id}" type="text" value="${esc(value.join(", "))}" ${dis}>`;
+  return `<input id="${id}" type="text" value="${esc(value ?? "")}" placeholder="(none)" ${dis}>`;
+}
+
+function readInput(el, value, def) {
+  if (el.type === "checkbox") return el.checked;
+  if (el.type === "number") { if (el.value.trim() === "") throw new Error("enter a number"); return Number(el.value); }
+  if (Array.isArray(value)) return el.value.split(",").map(s => Number(s.trim()));
+  if (value === null && el.value.trim() === "") return null;
+  return el.value;
+}
+
+function rowHTML(path, value, def) {
+  const key = path.join(".");
+  const locked = matchRule(key, CFG.read_only);
+  const restart = matchRule(key, CFG.restart_required);
+  const mod = def !== undefined && !same(value, def);
+  const flags = (restart ? `<span class="flag r">restart</span>` : "") + (locked ? `<span class="flag">locked</span>` : "");
+  const doc = docFor(path);
+  return `<div class="row ${mod ? "modified" : ""}" data-path="${esc(key)}" data-search="${esc((key + " " + (doc || "")).toLowerCase())}">
+    <div class="name">${esc(path[path.length - 1])}<span class="flags">${flags}</span>
+      ${mod && !locked ? `<button class="small reset" title="default: ${esc(JSON.stringify(def))}">reset</button>` : ""}</div>
+    <div class="ctl">${inputFor(path, value, def, locked)}</div>
+    ${doc ? `<div class="help">${esc(doc)}</div>` : ""}
+  </div>`;
+}
+
+function tableHTML(path, value) {
+  const key = path.join(".");
+  const doc = docFor(path) || "";
+  const mod = !same(value, get(CFG.defaults, path));
+  return `<div class="row wide ${mod ? "modified" : ""}" data-path="${esc(key)}" data-table="1" data-search="${esc((key + " " + doc).toLowerCase())}">
+    <div class="name">${esc(path[path.length - 1])} <span class="flags"><span class="flag">JSON</span></span></div>
+    <textarea rows="3" spellcheck="false">${esc(JSON.stringify(value))}</textarea>
+    <div class="help">${esc(doc)} Example: {"chest": [[3, 1.0], [8, 1.06]]}. Click outside the box to apply.</div>
+  </div>`;
+}
+
+function sectionBody(path, obj, defs) {
+  let html = "", subs = "";
+  for (const [k, v] of Object.entries(obj)) {
+    const p = [...path, k];
+    const d = defs ? defs[k] : undefined;
+    if (k === "profiles") {
+      for (const [name, prof] of Object.entries(v)) {
+        subs += `<div class="sub">profile: ${esc(name)}</div>`;
+        for (const [pk, pv] of Object.entries(prof))
+          subs += rowHTML([...p, name, pk], pv, d && d[name] ? d[name][pk] : undefined);
+      }
+    } else if (k === "speed_table") {
+      html += tableHTML(p, v);
+    } else if (v && typeof v === "object" && !Array.isArray(v)) {
+      subs += `<div class="sub">${esc(k)}</div>` + sectionBody(p, v, d);
+    } else {
+      html += rowHTML(p, v, d);
+    }
+  }
+  return html + subs;
+}
+
+function renderConfig(keepOpen = true) {
+  const open = new Set([...document.querySelectorAll("details.sec[open]")].map(d => d.dataset.sec));
+  const box = $("#config");
+  box.innerHTML = Object.entries(CFG.values).map(([sec, obj]) => {
+    const n = countModified([sec], obj, CFG.defaults[sec]);
+    return `<details class="sec" data-sec="${sec}" ${keepOpen && open.has(sec) ? "open" : ""}>
+      <summary>${esc(TITLES[sec] || sec)} ${n ? `<span class="count">${n} changed</span>` : ""}</summary>
+      ${sectionBody([sec], obj, CFG.defaults[sec])}
+    </details>`;
+  }).join("");
+  applyFilter();
+  const profs = Object.keys(CFG.values.launcher.profiles);
+  const sel = $("#plan-p"), cur = sel.value;
+  sel.innerHTML = profs.map(p => `<option ${p === cur ? "selected" : ""}>${esc(p)}</option>`).join("");
+}
+
+function countModified(path, obj, def) {
+  let n = 0;
+  for (const [k, v] of Object.entries(obj)) {
+    const d = def ? def[k] : undefined;
+    if (v && typeof v === "object" && !Array.isArray(v) && k !== "speed_table") n += countModified([...path, k], v, d);
+    else if (d !== undefined && !same(v, d)) n++;
+    else if (d === undefined && k !== "speed_table") n++;   // e.g. a newly added profile field
+  }
+  return n;
+}
+
+async function send(pathStr, value, rowEl) {
+  const path = pathStr.split(".");
+  try {
+    const r = await api("api/config", nest(path, value));
+    CFG.values = r.values;
+    const restart = r.restart_needed.length ? " (takes effect after restart)" : "";
+    toast(`${pathStr} = ${JSON.stringify(value)}${restart}`);
+    renderConfig();
+    updatePlan();
+  } catch (e) {
+    if (rowEl) {
+      rowEl.querySelector(".err")?.remove();
+      rowEl.insertAdjacentHTML("beforeend", `<div class="err">${esc(e.message)}</div>`);
+    }
+    toast(e.message, true);
+  }
+}
+
+$("#config").addEventListener("change", e => {
+  const row = e.target.closest(".row");
+  if (!row) return;
+  const path = row.dataset.path.split(".");
+  if (row.dataset.table) {
+    let v;
+    try { v = JSON.parse(e.target.value || "{}"); } catch (err) { return toast("not valid JSON", true); }
+    return send(row.dataset.path, v, row);
+  }
+  const value = get(CFG.values, path), def = get(CFG.defaults, path);
+  let v;
+  try { v = readInput(e.target, value, def); } catch (err) { return toast(err.message, true); }
+  send(row.dataset.path, v, row);
+});
+
+$("#config").addEventListener("click", e => {
+  if (!e.target.classList.contains("reset")) return;
+  e.preventDefault();
+  const row = e.target.closest(".row");
+  send(row.dataset.path, get(CFG.defaults, row.dataset.path.split(".")), row);
+});
+
+function applyFilter() {
+  const q = $("#filter").value.trim().toLowerCase();
+  document.querySelectorAll("details.sec").forEach(sec => {
+    let any = false;
+    sec.querySelectorAll(".row").forEach(r => {
+      const hit = !q || r.dataset.search.includes(q);
+      r.classList.toggle("hidden", !hit);
+      any = any || hit;
+    });
+    sec.querySelectorAll(".sub").forEach(s => s.classList.toggle("hidden", !!q));
+    sec.classList.toggle("hidden", !any);
+    if (q && any) sec.open = true;
+  });
+}
+$("#filter").addEventListener("input", applyFilter);
+
+$("#save").addEventListener("click", async () => {
+  try {
+    const r = await api("api/config/save", {});
+    $("#save-note").textContent = `Saved to ${r.path}. Start with --config ${r.path} to use these settings.`;
+    toast("saved " + r.path);
+  } catch (e) { toast(e.message, true); }
+});
+
+async function loadConfig() {
+  try {
+    CFG = await api("api/config");
+    $("#save-note").textContent = `Changes apply immediately. "Save" writes them to ${CFG.save_path}.`;
+    renderConfig(false);
+    const first = document.querySelector('details.sec[data-sec="launcher"]');
+    if (first) first.open = true;
+    updatePlan();
+  } catch (e) {
+    $("#config").innerHTML = `<div class="body bad">${esc(e.message)}</div>`;
+  }
+}
+
+startVideo();
+pollStatus();
+loadConfig();
+</script>
+</body>
+</html>
