@@ -5,11 +5,12 @@ app.py -- main entry point.
     python -m passer.app --config configs/rpi.yaml --headless     # Pi over SSH, dry run
     python -m passer.app --config configs/rpi.yaml --live         # really fires!
 
-Control loop (~30 Hz, main thread):
+Control loop (~30 Hz, main thread), see controller.py:
   1. read the newest TrackingState from the vision pipeline
-  2. drive the pan turret towards the player (+ lead offset if requested)
-  3. when a confirmed gesture arrives: freeze distance, compute the launch
-     plan, wait until the turret is on target, fire
+  2. camera servo keeps the player centred; launcher turret leads the
+     player's predicted position
+  3. when a confirmed gesture arrives: aim at the predicted catch point,
+     fire once the launcher is on target
   4. draw the debug view (unless headless)
 
 Keys in the preview window:
@@ -21,27 +22,12 @@ from __future__ import annotations
 import argparse
 import logging
 import time
-from dataclasses import dataclass
-from typing import Optional
 
 from .config import Config, load_config
-from .hardware.pan_axis import make_pan_axis
-from .hardware.ps100 import PS100
-from .kinematics import plan_launch
-from .launcher import Launcher
-from .turret import TurretController
+from .controller import MachineController
 from .vision.gestures import Gesture
 
 log = logging.getLogger("passer")
-
-AIM_TIMEOUT_S = 2.0
-
-
-@dataclass
-class PendingShot:
-    gesture: Gesture
-    distance_m: float
-    created: float
 
 
 class PassingMachine:
@@ -55,47 +41,21 @@ class PassingMachine:
         self.pipeline = VisionPipeline(cfg, self.camera,
                                        make_person_detector(cfg.detector),
                                        GestureModels(cfg))
-        self.axis = make_pan_axis(cfg.turret)
-        self.turret = TurretController(self.axis, cfg.turret)
-        self.launcher = Launcher(PS100.from_config(cfg.ps100, cfg.app.dry_run),
-                                 cfg.launcher, cfg.app.reload_delay_s)
-        self.pending: Optional[PendingShot] = None
-        self.status = ""
-        self._has_pan_motor = cfg.turret.backend not in ("none", "virtual")
+        self.ctl = MachineController.from_config(cfg)
 
-    # ------------------------------------------------------------------
-    def request_shot(self, gesture: Gesture, distance_m: Optional[float]) -> None:
-        if distance_m is None:
-            self.status = f"{gesture.value}: no distance estimate, ignored"
-            log.warning(self.status)
-            return
-        if not self.launcher.ready:
-            self.status = f"{gesture.value}: launcher {self.launcher.state.value}, ignored"
-            log.warning(self.status)
-            return
-        self.pending = PendingShot(gesture, distance_m, time.monotonic())
-        self.turret.set_lead(gesture.lead_sign * self.cfg.turret.lead_m, distance_m)
-        self.status = f"aiming for {gesture.value} @ {distance_m:.1f} m"
-        log.info(self.status)
-
-    def _try_fire(self) -> None:
-        p = self.pending
-        if p is None:
-            return
-        aimed = self.turret.on_target() or not self._has_pan_motor \
-            or not self.cfg.app.require_on_target
-        if not aimed:
-            if time.monotonic() - p.created > AIM_TIMEOUT_S:
-                self.status = f"{p.gesture.value}: could not aim in time, cancelled"
-                log.warning(self.status)
-                self.pending = None
-                self.turret.set_lead(0.0, None)
-            return
-        plan = plan_launch(p.distance_m, p.gesture.profile, self.cfg.launcher)
-        self.launcher.fire(plan)
-        self.status = plan.summary().splitlines()[0]
-        self.pending = None
-        self.turret.set_lead(0.0, None)
+    def _status_lines(self):
+        t = self.ctl.turret
+        est = t.estimator.state_at(time.monotonic())
+        vel = f"v=({est[2]:+.1f},{est[3]:+.1f}) m/s" if est and t.estimator.ready else "v=--"
+        lt = t.launcher_target
+        return [
+            f"launcher {t.launcher.angle():+5.1f} -> {lt:+5.1f} deg" if lt is not None
+            else f"launcher {t.launcher.angle():+5.1f} deg",
+            f"camera {t.camera.angle():+5.1f} deg (rel)  bearing "
+            + (f"{t.last_bearing:+5.1f}" if t.last_bearing is not None else "--") + f"  {vel}",
+            f"arm {self.ctl.launcher.state.value}  {'DRY' if self.cfg.app.dry_run else 'LIVE'}",
+            self.ctl.status,
+        ]
 
     # ------------------------------------------------------------------
     def run(self) -> None:
@@ -115,44 +75,44 @@ class PassingMachine:
                 dt, t_prev = now - t_prev, now
                 st = self.pipeline.latest()
 
-                self.turret.update(st.pan_error_deg, dt)
+                fr = st.frame
+                self.ctl.tick(now, dt,
+                              frame_id=fr.frame_id if fr else None,
+                              t_frame=fr.timestamp if fr else None,
+                              pan_error_deg=st.pan_error_deg,
+                              distance_m=st.distance_m if st.box is not None else None,
+                              reliable=st.distance_reliable)
 
                 cmd = self.pipeline.get_command()
-                if cmd is not None and self.pending is None:
-                    self.request_shot(cmd[0], cmd[1].distance_m)
-                self._try_fire()
+                if cmd is not None:
+                    self.ctl.request_shot(cmd[0], now)
 
                 if headless:
                     if now - last_log > 1.0 and st.frame is not None:
                         last_log = now
-                        log.info("fps=%.1f dist=%s err=%s pan=%.1f gesture=%s launcher=%s",
+                        log.info("fps=%.1f dist=%s err=%s gesture=%s | %s",
                                  st.infer_fps,
                                  f"{st.distance_m:.2f}" if st.distance_m else "-",
                                  f"{st.pan_error_deg:+.1f}" if st.pan_error_deg is not None else "-",
-                                 self.turret.setpoint, st.gesture.value,
-                                 self.launcher.state.value)
+                                 st.gesture.value, " | ".join(self._status_lines()[:3]))
                     time.sleep(max(0.0, period - (time.monotonic() - now)))
                     continue
 
                 if st.frame is not None:
                     from .vision.overlay import draw
-                    img = draw(st, [
-                        f"pan {self.turret.setpoint:+5.1f} deg  launcher {self.launcher.state.value}"
-                        f"  {'DRY' if self.cfg.app.dry_run else 'LIVE'}",
-                        self.status,
-                    ], mirror=self.cfg.camera.mirror_display)
+                    img = draw(st, self._status_lines(), mirror=self.cfg.camera.mirror_display)
                     cv2.imshow("pass_me_da_ball (q to quit)", img)
                 key = cv2.waitKey(max(1, int((period - (time.monotonic() - now)) * 1000))) & 0xFF
                 if key == ord("q"):
                     break
                 elif key == ord("c"):
-                    self.request_shot(Gesture.CHEST, st.distance_m)
+                    self.ctl.request_shot(Gesture.CHEST, time.monotonic())
                 elif key == ord("b"):
-                    self.request_shot(Gesture.LOB, st.distance_m)
+                    self.ctl.request_shot(Gesture.LOB, time.monotonic())
                 elif key == ord("r"):
-                    self.launcher.reset()
+                    self.ctl.launcher.reset()
                 elif key == ord("s"):
-                    self.launcher.stop()
+                    self.ctl.launcher.stop()
         except KeyboardInterrupt:
             pass
         finally:
@@ -161,7 +121,7 @@ class PassingMachine:
     def shutdown(self) -> None:
         self.pipeline.stop()
         self.camera.stop()
-        self.axis.close()
+        self.ctl.turret.close()
         if not self.cfg.app.headless:
             import cv2
             cv2.destroyAllWindows()

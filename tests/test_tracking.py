@@ -1,9 +1,7 @@
 import pytest
 
-from passer.config import DistanceConfig, TargetConfig, TurretConfig
-from passer.hardware.pan_axis import VirtualPanAxis
-from passer.turret import (TurretController, focal_length_px,
-                           pixel_to_pan_error_deg)
+from passer.config import DistanceConfig, TargetConfig
+from passer.turret import focal_length_px, pixel_to_pan_error_deg
 from passer.vision.camera import lores_size_for
 from passer.vision.detection import Box, TargetTracker
 from passer.vision.distance import DistanceEstimator
@@ -47,36 +45,6 @@ def test_tracker_releases_after_timeout():
     other = Box(400, 50, 600, 470)
     assert tr.update([other], now=0.2) is None
     assert tr.update([other], now=1.0) == other
-
-
-def test_turret_converges_and_respects_limits():
-    cfg = TurretConfig(kp=2.0, kd=0.0, max_speed_dps=60, deadband_deg=0.5)
-    axis = VirtualPanAxis(cfg)
-    turret = TurretController(axis, cfg)
-    # simulate: camera on turret, player fixed at +20 deg in world frame
-    for _ in range(300):
-        err = 20.0 - axis.angle()
-        turret.update(err, 1 / 30)
-    assert axis.angle() == pytest.approx(20.0, abs=0.6)
-    assert turret.on_target()
-
-
-def test_turret_slew_limited():
-    cfg = TurretConfig(kp=100.0, kd=0.0, max_speed_dps=30)
-    axis = VirtualPanAxis(cfg)
-    turret = TurretController(axis, cfg)
-    turret.update(45.0, 0.1)
-    assert axis.angle() == pytest.approx(3.0)
-
-
-def test_turret_lead_offsets_aim():
-    cfg = TurretConfig(kp=2.0, kd=0.0, deadband_deg=0.1)
-    axis = VirtualPanAxis(cfg)
-    turret = TurretController(axis, cfg)
-    turret.set_lead(1.0, 1.0)          # 45 deg to the machine's right
-    for _ in range(600):
-        turret.update(0.0 - axis.angle(), 1 / 30)
-    assert axis.angle() == pytest.approx(45.0, abs=0.5)
 
 
 def test_lores_size_even_and_same_aspect():

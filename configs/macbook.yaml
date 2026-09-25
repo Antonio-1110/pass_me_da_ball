@@ -15,7 +15,10 @@ detector:
 distance:
   min_m: 0.5                # you'll be sitting close to the laptop
 
-turret:
+camera_axis:
+  backend: none
+
+launcher_axis:
   backend: none
 
 app:

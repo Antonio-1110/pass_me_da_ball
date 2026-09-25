@@ -1,19 +1,20 @@
 # pass_me_da_ball
 
-A vision-guided basketball passing machine. A camera finds the player, a pan
-turret keeps them centred, the player asks for a pass with a gesture, and a
-PS100 servo drive swings a geared launch arm with the speed and sweep worked
-out from the player's distance.
+A vision-guided basketball passing machine. A camera on a small servo keeps
+the player in view. The launcher sits on a stepper turret, predicts where
+the player is going and aims ahead of them. The player asks for a pass with a
+gesture, and a PS100 servo drive swings a geared launch arm with the speed
+and sweep worked out from the distance to the catch point.
 
 ```text
  camera thread            inference thread                        main loop (30 Hz)
  ─────────────            ────────────────                        ─────────────────
- Pi Camera / webcam  ──►  YOLO on lores (640 px) ─► pick player ─► turret PID ─► PanAxis (TBD motor)
- main + lores frames      distance + pan error                    confirmed gesture
-                          every N frames:                            │
-                           crop hi-res ROI ─► MediaPipe Hands        ▼
-                                          └► MediaPipe Pose     kinematics ─► PS100 over RS-485
-                           debounce ─► command queue            (fire, return, reload)
+ Pi Camera / webcam  ──►  YOLO on lores (640 px) ─► pick player ─► bearing + distance ─► player filter
+ main + lores frames      distance + pan error                      camera servo: keep player centred
+                          every N frames:                           launcher turret: lead the player
+                           crop hi-res ROI ─► MediaPipe Hands       confirmed gesture ─► aim at catch point
+                                          └► MediaPipe Pose         kinematics ─► PS100 over RS-485
+                           debounce ─► command queue                (fire, return, reload)
 ```
 
 ## Layout
@@ -27,8 +28,11 @@ out from the player's distance.
 | `passer/vision/pipeline.py` | Inference thread, crop-and-infer, gesture scheduling |
 | `passer/vision/gestures.py` | Hand and pose gesture classifiers, plus the debouncer |
 | `passer/vision/distance.py` | Distance from the height of the person's box (pinhole model) |
-| `passer/turret.py` | Pan error from pixels, PID with slew limit, lead offset |
-| `passer/hardware/pan_axis.py` | **Plug-in point for the camera/turret motor** (not chosen yet) |
+| `passer/controller.py` | Decision loop: observe, track, aim a pending shot, fire (no camera needed, so it's testable) |
+| `passer/turret.py` | Two-axis control: camera servo on top of the launcher turret, frame-time heading lookup, speed/accel-limited motion |
+| `passer/prediction.py` | Kalman filter on the player's floor position and velocity, plus a bearing filter for the camera |
+| `passer/aiming.py` | Where the launcher points: predicted catch point (fire latency + flight time) plus gesture lead |
+| `passer/hardware/pan_axis.py` | **Plug-in point for the camera servo and the launcher stepper** |
 | `passer/physics.py` | Ball flight with gravity and air drag; solves the launch speed to reach a catch point |
 | `passer/kinematics.py` | Arm model (arm length → release point and ball speed), calibration layer, PS100 registers |
 | `passer/calibration.py` | Fits the sim-to-real corrections from test shots |
@@ -146,21 +150,39 @@ covering the distances you care about. Shots are logged to
 5. `ps100.completion_mode`: check how `0x1010` bit 0 behaves with `ps100_cli status` (see the PS100 doc, §7). Use `time` if it is unreliable.
 6. Test with the arm unloaded, at low rpm and small sweeps first (`ps100_cli arm 10 --rpm 30`).
 
-## Adding the camera/turret motor
+## Two-axis turret
 
-The pan motor hasn't been chosen yet. Everything above it works in degrees:
-`PanAxis.move_to(deg)` and `PanAxis.angle()`. To add a motor:
+```text
+ launcher turret (stepper, world angle L)      slow and heavy: points where the player WILL be
+   └─ camera servo (hobby servo, angle C relative to the launcher)   fast and light: keeps the player in frame
 
-1. Subclass `PanAxis` in `passer/hardware/pan_axis.py` (there is a hobby-servo example in `GpioServoPanAxis`).
-2. Register it in `make_pan_axis()` and set `turret.backend` in your YAML.
-3. Tune `turret.kp/kd/max_speed_dps`. The PID and slew limit are already in `turret.py`, so the backend only has to forward small position steps.
+ camera heading = L + C          player bearing = camera heading (at frame time) + offset in the image
+```
 
-Until a motor exists, `turret.backend: none` uses a virtual axis. The machine
-then fires without waiting to be aimed, and lead passes are logged but have no
-effect.
+Each tick (~30 Hz):
+
+1. **Observe.** The vision result becomes a world bearing. The camera heading is looked up at the **frame's timestamp**, so the camera's own motion during inference latency (~0.1 s) doesn't skew it. The bearing, plus distance when known, goes into the player filters.
+2. **Launcher.** Between shots it follows the predicted lead angle, so a shot only needs a small correction (`track_between_shots`). When a gesture is confirmed, it aims at the **predicted catch point**: where the player will be after `fire_latency_s` plus the ball's flight time. It fires once it is within `on_target_deg`. PASS_LEFT / PASS_RIGHT add `lead_m` sideways.
+3. **Camera.** Its target is the predicted bearing now minus the launcher angle. That subtraction is a feed-forward: when the turret swings, the servo counter-rotates, so the player stays in frame (1° drift in simulation during a 30° swing).
+
+Both axes use a speed- and acceleration-limited follower with velocity feed-forward: no lag on a moving target, no overshoot on a step.
+
+**Adding the motors.** Everything above `passer/hardware/pan_axis.py` works in degrees (`move_to(deg)`, `angle()`).
+
+- **Camera servo:** already supported. Set `camera_axis.backend: gpio_servo` with `gpio_pin`, `trim_deg` (servo angle that points along the launcher) and `invert` if it turns the wrong way.
+- **Launcher stepper(s):** subclass `PanAxis` and register it in `make_launcher_axis()`. Prefer a driver that takes position commands (a closed-loop stepper over RS-485/CAN, or a microcontroller running AccelStepper over serial). Pulsing steps from Python on the Pi is jittery.
+
+Until a motor exists, `backend: none` uses a virtual axis that counts as fixed
+at 0°. The stack still runs and shows the commanded angles. With no launcher
+motor, shots fire without waiting to be aimed.
+
+**Tuning:** `launcher_axis.max_speed_dps / max_accel_dps2` (keep the heavy
+turret gentle), `fire_latency_s` (time from the fire command to the ball
+leaving the arm; measure it), and `prediction.*` (how jumpy the player filter
+is).
 
 ## Open items
 
 - Voice activation as an alternative trigger (see `webcam tracker test/note.txt`).
-- Predict the player's motion (lead from velocity rather than a fixed `lead_m`).
+- Driver for the launcher turret stepper(s) once the hardware is chosen.
 - Check on the hardware how the PS100 handles register writes during a move (PS100 doc §10).

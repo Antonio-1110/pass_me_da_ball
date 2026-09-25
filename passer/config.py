@@ -125,26 +125,64 @@ class DistanceConfig:
 
 
 # ---------------------------------------------------------------------------
-# Turret (camera / launcher pan axis)
+# Two-axis turret
+#
+#   launcher turret (stepper, heavy)  : angle in the WORLD frame, 0 = straight
+#                                       ahead of the machine, + = right
+#     camera servo (hobby servo)      : angle RELATIVE to the launcher turret
+#
+#   camera heading (world) = launcher angle + camera angle
+#   player bearing (world) = camera heading + pixel offset in the image
 # ---------------------------------------------------------------------------
 @dataclass
-class TurretConfig:
-    # "none" = no pan motor yet; the controller still computes and logs the
-    # target. Add new backends in passer/hardware/pan_axis.py.
+class CameraAxisConfig:
+    """Hobby servo that pans the camera on top of the launcher turret."""
+    # "none" = no servo yet: camera is treated as fixed at 0 relative to the
+    # launcher; commands are still computed and shown. "gpio_servo" = gpiozero.
     backend: str = "none"
-    min_deg: float = -90.0
+    gpio_pin: int = 18               # use a hardware-PWM pin: 12, 13, 18 or 19
+    min_deg: float = -60.0           # relative to the launcher turret
+    max_deg: float = 60.0
+    trim_deg: float = 0.0            # servo angle that points the camera along the launcher
+    invert: bool = False             # servo mounted so + turns left
+    max_speed_dps: float = 120.0     # slew limit -> keeps motion blur down
+    max_accel_dps2: float = 600.0
+    deadband_deg: float = 1.0        # don't chase tiny errors (reduces jitter)
+
+
+@dataclass
+class LauncherAxisConfig:
+    """Stepper-driven turret carrying the launcher (and the camera servo)."""
+    backend: str = "none"            # add real drivers in passer/hardware/pan_axis.py
+    min_deg: float = -90.0           # world frame
     max_deg: float = 90.0
-    max_speed_dps: float = 60.0      # slew limit, keeps camera motion blur down
-    kp: float = 2.0
-    ki: float = 0.0
-    kd: float = 0.15
-    deadband_deg: float = 1.5        # don't chase tiny errors (reduces jitter)
-    on_target_deg: float = 3.0       # |error| below this counts as "aimed"
-    # Sideways lead for PASS_LEFT / PASS_RIGHT, as a lateral distance at the
-    # player; converted to an angle using the measured distance.
+    max_speed_dps: float = 45.0      # heavy: keep it gentle
+    max_accel_dps2: float = 90.0
+    on_target_deg: float = 2.0       # |aim error| below this counts as aimed
+    # Keep leading the player between shots, so a fire request only needs a
+    # small correction.
+    track_between_shots: bool = True
+    # Lateral lead for PASS_LEFT / PASS_RIGHT gestures, at the player.
     lead_m: float = 1.5
-    # Launcher heading relative to camera optical axis (mounting offset).
-    launcher_offset_deg: float = 0.0
+    # Seconds from "fire" to the ball leaving the arm (Modbus writes + arm
+    # acceleration). Added to the flight time for motion prediction.
+    fire_latency_s: float = 0.25
+    aim_timeout_s: float = 2.0       # give up on a shot if not aimed by then
+
+
+@dataclass
+class PredictionConfig:
+    """Constant-velocity Kalman filter on the player's floor position."""
+    accel_noise_mps2: float = 3.0    # how hard players change direction
+    range_noise_frac: float = 0.08   # distance measurement 1-sigma, fraction of range
+    bearing_noise_deg: float = 0.7
+    unreliable_range_factor: float = 3.0   # inflate range noise when distance is "held"
+    max_speed_mps: float = 8.0       # clamp absurd velocity estimates
+    min_updates: int = 5             # measurements before velocity is trusted
+    reset_after_s: float = 1.0       # restart the filter after losing the player
+    # Rough ball speed used to guess flight time while tracking (the exact
+    # value comes from the launch plan when a shot is actually taken).
+    nominal_ball_speed_mps: float = 9.0
 
 
 # ---------------------------------------------------------------------------
@@ -249,7 +287,7 @@ class PS100Config:
 class AppConfig:
     dry_run: bool = True             # never talk to the PS100 unless False
     headless: bool = False           # no preview window (Pi over SSH)
-    require_on_target: bool = True   # only fire when turret is aimed
+    require_on_target: bool = True   # only fire when the launcher turret is aimed
     reload_delay_s: float = 2.0      # time to reload a ball after the return move
     log_level: str = "INFO"
 
@@ -261,7 +299,9 @@ class Config:
     target: TargetConfig = field(default_factory=TargetConfig)
     gesture: GestureConfig = field(default_factory=GestureConfig)
     distance: DistanceConfig = field(default_factory=DistanceConfig)
-    turret: TurretConfig = field(default_factory=TurretConfig)
+    camera_axis: CameraAxisConfig = field(default_factory=CameraAxisConfig)
+    launcher_axis: LauncherAxisConfig = field(default_factory=LauncherAxisConfig)
+    prediction: PredictionConfig = field(default_factory=PredictionConfig)
     launcher: LauncherConfig = field(default_factory=LauncherConfig)
     ps100: PS100Config = field(default_factory=PS100Config)
     app: AppConfig = field(default_factory=AppConfig)

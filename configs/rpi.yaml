@@ -26,8 +26,12 @@ gesture:
   roi_max_side: 480         # Pi CPU budget
   pose_model_complexity: 0
 
-turret:
-  backend: none             # pan motor not chosen yet -> virtual axis
+camera_axis:
+  backend: none             # gpio_servo once the camera servo is wired (GPIO18)
+  gpio_pin: 18
+
+launcher_axis:
+  backend: none             # stepper driver TBD -> virtual axis
 
 ps100:
   port: /dev/ttyUSB0        # or a stable /dev/serial/by-id/... path
