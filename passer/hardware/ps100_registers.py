@@ -28,6 +28,9 @@ DEFAULT_STOPBITS = 1
 PULSES_PER_REV = 10_000
 DEGREES_PER_REV = 360.0
 
+# Launch arm gearbox: the motor turns this many times per arm revolution.
+GEAR_RATIO = 10
+
 # ----------------------------
 # Runtime Modbus registers
 # ----------------------------
@@ -86,3 +89,8 @@ def degrees_to_pulses(degrees: float) -> int:
 def pulses_to_degrees(pulses: int) -> float:
     """Convert command pulses to motor-shaft degrees."""
     return pulses / PULSES_PER_REV * DEGREES_PER_REV
+
+
+def arm_degrees_to_pulses(arm_degrees: float, gear_ratio: float = GEAR_RATIO) -> int:
+    """Convert launch-arm degrees to motor command pulses through the gearbox."""
+    return round(arm_degrees / DEGREES_PER_REV * gear_ratio * PULSES_PER_REV)

@@ -1,0 +1,13 @@
+# Raspberry Pi OS Bookworm (64-bit), Python 3.11.
+# picamera2 comes from apt, NOT pip:
+#   sudo apt install -y python3-picamera2 python3-opencv
+#   python3 -m venv --system-site-packages .venv && . .venv/bin/activate
+#   pip install -r requirements-pi.txt
+numpy<2            # keep in step with apt's python3-opencv / picamera2 builds
+ultralytics        # YOLOv8 (export to NCNN for speed: see configs/rpi.yaml)
+ncnn               # runtime for the exported NCNN model
+mediapipe==0.10.18 # legacy mp.solutions API; check: python -c "import mediapipe as mp; mp.solutions.hands"
+minimalmodbus>=2.1
+pyserial
+pyyaml
+gpiozero           # only for turret.backend: gpio_servo
