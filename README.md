@@ -29,7 +29,9 @@ out from the player's distance.
 | `passer/vision/distance.py` | Distance from the height of the person's box (pinhole model) |
 | `passer/turret.py` | Pan error from pixels, PID with slew limit, lead offset |
 | `passer/hardware/pan_axis.py` | **Plug-in point for the camera/turret motor** (not chosen yet) |
-| `passer/kinematics.py` | Distance and pass type to exit velocity, then arm rpm, then PS100 registers |
+| `passer/physics.py` | Ball flight with gravity and air drag; solves the launch speed to reach a catch point |
+| `passer/kinematics.py` | Arm model (arm length → release point and ball speed), calibration layer, PS100 registers |
+| `passer/calibration.py` | Fits the sim-to-real corrections from test shots |
 | `passer/hardware/ps100.py` | Modbus RTU driver, plus a simulated drive for dry runs |
 | `passer/launcher.py` | Fire, return and reload cycle, on its own thread |
 | `passer/tools/` | `plan_pass`, `ps100_cli`, `list_cameras` |
@@ -79,20 +81,68 @@ the hand model gets a crop taken from the full-resolution frame around the
 player. When no hands are found, the pose model on the same crop still reads
 the arm postures.
 
-## Launch math (see `passer/kinematics.py`)
+## Physics model (`physics.py`, `kinematics.py`)
 
-- The arm angle ψ is 0° when the arm points straight back and 90° when it points straight up. The ball's elevation at release is `90° − ψ_release`, and the commanded move is `sweep = ψ_release − home_angle`.
-- The exit speed comes from projectile motion from the release point (pivot height + arm geometry) to the target height at the player's distance. `ω = v / (arm_length × efficiency)`.
-- Gearbox: `motor_rpm = arm_rpm × 10` is written to `0x0204`. `motor_pulses = sweep/360 × 10 × 10000` is split into whole turns (`0x0202`) and remaining pulses (`0x0203`). Then `0x011F` gets 0 → 1.
-- After the throw the arm goes back to home with the reverse move at `return_rpm`.
-- `python -m passer.tools.plan_pass` prints the register values for 2–10 m. It warns when the acceleration ramp (FA40) takes up more of the sweep than is available.
+**The main input is `launcher.arm_length_m`.** Once you know it, you choose
+two things for every pass: the arm speed ω and the arm angle where the ball
+leaves (ψ). Everything else follows from them:
 
-## Calibration checklist
+- **Ball speed** `v = ω × arm_length`
+- **Launch angle** `θ = 90° − ψ`, because the ball leaves tangent to the arm. The arm angle ψ is 0° when the arm points straight back and 90° when it points straight up.
+- **Release point** `x = −L cos ψ`, `h = pivot_height + L sin ψ`
 
+So besides the arm length, the model needs `pivot_height_m` (it sets the release height) and each profile's catch height.
+
+For each pass, the planner:
+
+1. Takes the profile's launch angle and catch height, and the player's distance from vision.
+2. Simulates the ball flight **with air drag** (RK4) and solves for the speed that reaches the catch point. Drag adds about 6–8% to the speed needed at 8–10 m compared with a vacuum parabola. `ball.drag: false` switches it off.
+3. Applies the **calibration layer** (below).
+4. Converts ω into arm rpm, then motor rpm (× gear ratio), which goes to `0x0204`. The sweep is split into turns and pulses for `0x0202` / `0x0203`.
+5. Deals with the drive's speed ramps. Because the ball sits in an open cup, it leaves as soon as the arm starts to **decelerate**. So the move is extended by the FA41 braking travel: braking starts exactly at the release angle, while the arm is still at full speed. The planner warns when the FA40 acceleration ramp doesn't fit before release, and refuses when the move would go past `max_arm_angle_deg`.
+
+Explore designs without hardware:
+```bash
+python -m passer.tools.plan_pass                       # table for 2–10 m
+python -m passer.tools.plan_pass --arm-length 0.8      # what would a longer arm need?
+python -m passer.tools.plan_pass -d 6 --plot traj.png  # trajectory plot (matplotlib)
+```
+
+## Sim-to-real calibration
+
+The model won't match the real machine exactly (ball slip in the cup, arm
+flex, the exact moment of release, how accurate the vision distance is). The
+corrections are kept separate from the physics, so you can adjust them
+without touching it:
+
+| Knob (`launcher.calibration.*`) | Use it when |
+|---|---|
+| `speed_scale` | The ball lands short (raise it) or long (lower it) at all ranges |
+| `speed_offset_mps` | Fixed speed loss, added before scaling |
+| `speed_table: {chest: [[3, 1.0], [8, 1.06]]}` | The error changes with distance; linear interpolation per profile |
+| `angle_offset_deg` | The ball flies steeper (+) or flatter (−) than planned; the release angle shifts to compensate |
+| `distance_scale`, `distance_offset_m` | The vision distance is off |
+| `profiles.<name>.speed_scale` / `.angle_offset_deg` | Trims for a single pass type |
+
+**Fitting them from test shots:**
+```bash
+python -m passer.tools.calibrate predict --profile chest --rpm 1000 1300 1600  # where the model expects them to land
+python -m passer.tools.calibrate fire --profile chest --rpm 1300 --live        # fire, then type the landing distance
+python -m passer.tools.calibrate add --profile lob --rpm 1300 --landed 6.9 --flight-time 1.45
+python -m passer.tools.calibrate fit                                           # prints YAML to paste into your config
+```
+Measure landing distance from the pivot to where the ball first hits the
+floor. If you also time the flight from slow-motion video (release → floor),
+the fit can separate a speed error from an angle error for that pass type.
+Without timing it can only correct speed. Use at least 3 rpms per pass type,
+covering the distances you care about. Shots are logged to
+`calibration/shots.csv`.
+
+**Other things to set:**
 1. `camera.hfov_deg`: set it for your lens. It drives both pan error and distance.
-2. Distance: stand at 3 m and 6 m and compare with the preview. Adjust `distance.person_height_m` (it is effectively a scale factor).
-3. `launcher.arm_length_m`, `pivot_height_m`, `home_angle_deg`: measure these on the machine.
-4. `launcher.efficiency`: fire at a known distance, measure where the ball lands, and scale.
+2. Distance: stand at 3 m and 6 m and compare with the preview. Adjust `distance.person_height_m` or `calibration.distance_scale`.
+3. `launcher.arm_length_m`, `pivot_height_m`, `home_angle_deg`, `max_arm_angle_deg`: measure these on the machine.
+4. `accel_ms_per_1000rpm` / `decel_ms_per_1000rpm`: copy them from the drive's FA40 / FA41.
 5. `ps100.completion_mode`: check how `0x1010` bit 0 behaves with `ps100_cli status` (see the PS100 doc, §7). Use `time` if it is unreliable.
 6. Test with the arm unloaded, at low rpm and small sweeps first (`ps100_cli arm 10 --rpm 30`).
 

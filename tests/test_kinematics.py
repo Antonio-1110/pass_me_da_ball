@@ -3,9 +3,10 @@ import math
 import pytest
 
 from passer.config import LauncherConfig
+from passer.config import BallConfig
 from passer.kinematics import (G, accel_arm_degrees, arm_degrees_to_motor_pulses,
                                arm_move, estimate_move_time_s, plan_launch,
-                               required_speed, return_move, split_pulses)
+                               return_move, split_pulses)
 
 
 def test_quarter_arm_turn_matches_spec_example():
@@ -26,18 +27,8 @@ def test_arm_speed_multiplied_by_gear_ratio():
     assert (m.turns, m.pulses) == (2, 5000)
 
 
-def test_required_speed_level_ground_45deg():
-    # Classic range equation: R = v^2 / g at 45 deg
-    v = required_speed(10.0, 0.0, 45.0)
-    assert v == pytest.approx(math.sqrt(10.0 * G))
-
-
-def test_required_speed_unreachable():
-    assert required_speed(3.0, 5.0, 10.0) == math.inf
-
-
-def test_plan_hits_target_height():
-    cfg = LauncherConfig()
+def test_plan_hits_target_height_without_drag():
+    cfg = LauncherConfig(ball=BallConfig(drag=False))
     for name in cfg.profiles:
         p = plan_launch(5.0, name, cfg)
         assert p.ok, p.warnings
@@ -49,7 +40,7 @@ def test_plan_hits_target_height():
         assert p.motor_rpm > 0
         # release angle geometry
         assert p.release_angle_deg == pytest.approx(90 - p.launch_angle_deg)
-        assert p.sweep_deg == pytest.approx(p.release_angle_deg - cfg.home_angle_deg)
+        assert p.sweep_deg == pytest.approx(p.end_angle_deg - cfg.home_angle_deg)
 
 
 def test_farther_needs_faster():

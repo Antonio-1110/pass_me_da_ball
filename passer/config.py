@@ -153,30 +153,71 @@ class TurretConfig:
 @dataclass
 class PassProfile:
     launch_angle_deg: float          # ball elevation at release
-    target_height_m: float           # height the ball should arrive at
+    target_height_m: float           # height the ball should arrive at (catch height)
+    # Per-profile sim-to-real trims, applied on top of CalibrationConfig.
+    speed_scale: float = 1.0
+    angle_offset_deg: float = 0.0
+
+
+@dataclass
+class BallConfig:
+    """Size 7 basketball. Drag matters: ~10-20% extra speed needed at 6-10 m."""
+    mass_kg: float = 0.62
+    diameter_m: float = 0.24
+    drag_coeff: float = 0.50
+    air_density: float = 1.20
+    drag: bool = True                # False = ideal vacuum parabola
+
+
+@dataclass
+class CalibrationConfig:
+    """
+    Sim-to-real corrections. The physics model gives the "ideal" command;
+    these knobs bend it to match what the real machine does. Fit them with
+    `python -m passer.tools.calibrate fit`, or tweak by hand:
+
+      ball lands SHORT everywhere        -> raise speed_scale (e.g. 1.00 -> 1.08)
+      short only at long range           -> add a speed_table point at that range
+      ball flies STEEPER than planned    -> positive angle_offset_deg
+      vision distance reads 10% too long -> distance_scale = 0.9
+    """
+    speed_scale: float = 1.0         # multiplies commanded ball speed
+    speed_offset_mps: float = 0.0    # added to required ball speed before scaling
+    angle_offset_deg: float = 0.0    # real launch angle minus planned
+    distance_scale: float = 1.0      # applied to the vision distance
+    distance_offset_m: float = 0.0
+    # Per-profile distance-dependent speed multiplier, linearly interpolated
+    # (clamped at the ends): {"chest": [[3.0, 1.00], [8.0, 1.06]], ...}
+    speed_table: dict = field(default_factory=dict)
 
 
 @dataclass
 class LauncherConfig:
-    gear_ratio: float = 10.0         # motor revs per arm rev
-    pulses_per_rev: int = 10_000     # PS100 PA11
-    arm_length_m: float = 0.60       # pivot to ball centre
-    pivot_height_m: float = 0.90     # pivot height above floor
+    # -- The main physical input ------------------------------------------
+    arm_length_m: float = 0.60       # pivot to ball centre. Ball speed = omega * this.
+    # -- Geometry -----------------------------------------------------------
+    pivot_height_m: float = 0.90     # pivot height above floor (sets release height)
     # Arm angle convention (see kinematics.py): 0 deg = arm pointing straight
     # back (horizontal), 90 deg = straight up. Ball elevation at release is
     # 90 - release_angle. Starting below horizontal (negative) gives the arm
     # more travel to get up to speed before release.
     home_angle_deg: float = -45.0
-    # Real release speed is below the ideal omega*r (ball slip, arm flex,
-    # decel before the stop). Calibrate: fire at a known speed, measure,
-    # set efficiency = measured / predicted.
-    efficiency: float = 0.85
+    max_arm_angle_deg: float = 135.0 # mechanical limit / hard stop for the end of the sweep
+    # -- Drive --------------------------------------------------------------
+    gear_ratio: float = 10.0         # motor revs per arm rev
+    pulses_per_rev: int = 10_000     # PS100 PA11
     max_motor_rpm: int = 3000
     min_motor_rpm: int = 50
     return_rpm: int = 100            # slow move back to home after a throw
-    # PS100 FA40: ms to accelerate 0 -> 1000 rpm. Used to check the sweep is
-    # long enough to reach the commanded speed before release.
+    # PS100 FA40 / FA41: ms to go 0 <-> 1000 rpm (linear ramps).
     accel_ms_per_1000rpm: float = 50.0
+    decel_ms_per_1000rpm: float = 50.0
+    # The ball sits in an open cup, so it leaves as soon as the arm starts to
+    # decelerate. True = extend the move so deceleration BEGINS at the release
+    # angle (ball leaves at full speed). False = release at the end position.
+    release_at_decel_start: bool = True
+    ball: BallConfig = field(default_factory=BallConfig)
+    calibration: CalibrationConfig = field(default_factory=CalibrationConfig)
     profiles: dict = field(default_factory=lambda: {
         "chest": PassProfile(launch_angle_deg=20.0, target_height_m=1.3),
         "lob": PassProfile(launch_angle_deg=55.0, target_height_m=2.0),
