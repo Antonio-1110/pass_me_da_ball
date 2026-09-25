@@ -1,0 +1,5 @@
+add in voice activation capability for ball launching instead of palm detection
+
+Multi human detection problem
+
+palm signal should only be triggered if both palms are detected

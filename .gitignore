@@ -1,0 +1,50 @@
+# --- macOS ---
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.so
+*.egg-info/
+.eggs/
+build/
+dist/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.ipynb_checkpoints/
+
+# --- Virtual environments ---
+.venv/
+venv/
+env/
+.env
+
+# --- Model weights (downloaded at runtime, e.g. ultralytics fetches yolov8n.pt) ---
+*.pt
+*.pth
+*.onnx
+*.task
+*.tflite
+*.mlpackage/
+*.engine
+
+# --- Ultralytics / training outputs ---
+runs/
+
+# --- Recordings, logs, and captured frames ---
+*.log
+*.mp4
+*.avi
+*.mov
+captures/
+recordings/
+
+# --- Editors / IDEs ---
+.vscode/
+.idea/
+*.swp
+*~
