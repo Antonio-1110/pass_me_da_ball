@@ -1,0 +1,6 @@
+# Enough to run the unit tests and the planning/bench tools (no models, no camera).
+numpy
+opencv-python-headless
+minimalmodbus>=2.1
+pyyaml
+pytest

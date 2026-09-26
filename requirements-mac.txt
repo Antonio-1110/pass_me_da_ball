@@ -1,0 +1,7 @@
+# MacBook (Apple Silicon) development.
+opencv-python
+ultralytics
+mediapipe==0.10.9  # newer versions break the legacy API / crash on Metal init on macOS
+minimalmodbus>=2.1
+pyserial
+pyyaml

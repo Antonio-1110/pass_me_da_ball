@@ -1,0 +1,26 @@
+# Development on a MacBook with the built-in webcam.
+#   python -m passer.app --config configs/macbook.yaml
+
+camera:
+  backend: opencv
+  index: 0                  # python -m passer.tools.list_cameras
+  hfov_deg: 70              # approximate for the FaceTime HD camera
+  mirror_display: true      # feels natural when facing the laptop
+
+detector:
+  backend: yolo
+  yolo_imgsz: 640
+  device: null              # auto -> mps on Apple Silicon
+
+distance:
+  min_m: 0.5                # you'll be sitting close to the laptop
+
+camera_axis:
+  backend: none
+
+launcher_axis:
+  backend: none
+
+app:
+  dry_run: true
+  headless: false

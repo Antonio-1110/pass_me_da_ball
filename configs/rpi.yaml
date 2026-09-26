@@ -1,0 +1,41 @@
+# Raspberry Pi 5 + Camera Module 3 (CSI ribbon) + USB-RS485 -> PS100.
+# Only values that differ from passer/config.py defaults need to be here.
+#
+#   python -m passer.app --config configs/rpi.yaml --headless          # dry run
+#   python -m passer.app --config configs/rpi.yaml --headless --live   # real drive
+
+camera:
+  backend: picamera2
+  main_size: [2304, 1296]   # Module 3 full-FOV binned mode (use [1640, 1232] for Module 2)
+  lores_width: 640
+  fps: 30
+  hfov_deg: 66              # Module 3 standard lens; Wide = 102, Module 2 = 62.2
+  rotate_180: false
+  mirror_display: false
+
+detector:
+  backend: yolo
+  # After: yolo export model=yolov8n.pt format=ncnn imgsz=320
+  # yolo_model: yolov8n_ncnn_model
+  yolo_model: yolov8n.pt
+  yolo_imgsz: 320
+  device: cpu
+
+gesture:
+  every_n_frames: 4
+  roi_max_side: 480         # Pi CPU budget
+  pose_model_complexity: 0
+
+camera_axis:
+  backend: none             # gpio_servo once the camera servo is wired (GPIO18)
+  gpio_pin: 18
+
+launcher_axis:
+  backend: none             # stepper driver TBD -> virtual axis
+
+ps100:
+  port: /dev/ttyUSB0        # or a stable /dev/serial/by-id/... path
+
+app:
+  dry_run: true
+  headless: true

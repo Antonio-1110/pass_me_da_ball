@@ -356,13 +356,13 @@ The supplied documentation does not specify how rewriting `0x0202`, `0x0203`, or
 The accompanying file:
 
 ```text
-ps100_registers.py
+passer/hardware/ps100_registers.py
 ```
 
 contains the register addresses and scaling constants so other programs can import them:
 
 ```python
-from ps100_registers import (
+from passer.hardware.ps100_registers import (
     REG_POSITION_TURNS,
     REG_POSITION_PULSES,
     REG_POSITION_SPEED,
@@ -375,13 +375,24 @@ from ps100_registers import (
 Example:
 
 ```python
-from ps100_registers import degrees_to_pulses
+from passer.hardware.ps100_registers import degrees_to_pulses
 
 target = degrees_to_pulses(150)
 print(target)  # approximately 4167
 ```
 
 Keeping register addresses in one module avoids scattering unexplained hexadecimal values throughout the project.
+
+The driver that actually performs the write sequence is `passer/hardware/ps100.py`
+(`PS100.move(turns, pulses, rpm)`), and `passer/kinematics.py` converts arm
+degrees / arm rpm into these register values through the 10:1 gearbox. For bench
+testing use:
+
+```bash
+python -m passer.tools.ps100_cli --dry-run arm 90 --rpm 60   # print writes only
+python -m passer.tools.ps100_cli status                      # read 0x1010
+python -m passer.tools.ps100_cli arm 10 --rpm 30             # small real move
+```
 
 ---
 
