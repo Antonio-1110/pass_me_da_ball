@@ -90,3 +90,19 @@ def test_debouncer_resets_on_flicker():
     d = GestureDebouncer(GestureConfig(confirm_count=3, cooldown_sec=0))
     seq = [Gesture.CHEST, Gesture.CHEST, Gesture.NONE, Gesture.CHEST, Gesture.CHEST]
     assert all(d.update(g, i) is None for i, g in enumerate(seq))
+
+
+def test_crossed_forearms_is_session():
+    lm = body(30, 30)
+    lm[P_L_WRIST] = P(x=0.43, y=0.5, visibility=0.9)   # person's left wrist crossed to their right
+    lm[P_R_WRIST] = P(x=0.57, y=0.5, visibility=0.9)
+    assert classify_pose(lm, CFG) is Gesture.SESSION
+    assert not Gesture.SESSION.is_shot and Gesture.LOB.is_shot
+    lm[P_L_WRIST], lm[P_R_WRIST] = P(x=0.57, y=0.5, visibility=0.9), P(x=0.43, y=0.5, visibility=0.9)
+    assert classify_pose(lm, CFG) is not Gesture.SESSION   # hands in front, not crossed
+
+
+def test_session_gesture_needs_a_longer_hold():
+    d = GestureDebouncer(GestureConfig(confirm_count=3, session_confirm_count=6, cooldown_sec=0))
+    out = [d.update(Gesture.SESSION, 0.1 * i) for i in range(6)]
+    assert out == [None] * 5 + [Gesture.SESSION]

@@ -39,3 +39,6 @@ ps100:
 app:
   dry_run: true
   headless: true
+
+web:
+  password: "changeme"      # dashboard login -- change this

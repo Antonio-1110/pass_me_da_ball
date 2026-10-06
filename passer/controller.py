@@ -9,6 +9,9 @@ Per tick:
   turret.update()        -> camera servo tracks, launcher leads
   pending shot?          -> solve aim at the predicted catch point
                             -> launcher on target? -> fire the launch plan
+
+Throws are only taken during a session (started/ended from the dashboard
+or with the crossed-forearms gesture); outside one the machine just tracks.
 """
 
 from __future__ import annotations
@@ -42,6 +45,8 @@ class MachineController:
         self.pending: Optional[PendingShot] = None
         self.last_solution: Optional[AimSolution] = None
         self.status = ""
+        self.session_active = False
+        self.session_started: Optional[float] = None
 
     @classmethod
     def from_config(cls, cfg: Config) -> "MachineController":
@@ -57,8 +62,28 @@ class MachineController:
         self.status = msg
         (log.warning if warn else log.info)(msg)
 
+    def start_session(self, now: float, source: str) -> None:
+        if not self.session_active:
+            self.session_active, self.session_started = True, now
+            self._set_status(f"session started ({source})")
+
+    def end_session(self, source: str) -> None:
+        if self.session_active:
+            self.cancel("session ended")
+            self.session_active, self.session_started = False, None
+            self._set_status(f"session ended ({source})")
+
+    def toggle_session(self, now: float, source: str) -> None:
+        if self.session_active:
+            self.end_session(source)
+        else:
+            self.start_session(now, source)
+
     def request_shot(self, gesture: Gesture, now: float) -> bool:
-        if self.pending is not None:
+        if not gesture.is_shot or self.pending is not None:
+            return False
+        if not self.session_active:
+            self._set_status(f"{gesture.value}: no session running, ignored", True)
             return False
         if not self.launcher.ready:
             self._set_status(f"{gesture.value}: launcher {self.launcher.state.value}, ignored", True)

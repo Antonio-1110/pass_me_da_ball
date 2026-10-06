@@ -13,6 +13,8 @@ without cameras or models:
       left arm out sideways ~90 deg, right arm down -> PASS_LEFT
       right arm out sideways ~90 deg, left arm down -> PASS_RIGHT
       both arms raised above the head               -> LOB
+      forearms crossed in an X in front of the chest -> SESSION (start / end a
+                                                       session; held longer)
 
 LEFT / RIGHT always mean the PLAYER's own left / right. MediaPipe Pose
 labels landmarks from the person's point of view when it is given an
@@ -39,6 +41,11 @@ class Gesture(str, Enum):
     PASS_LEFT = "pass_left"    # lead pass to the player's left
     PASS_RIGHT = "pass_right"  # lead pass to the player's right
     LOB = "lob"                # high-arc lob
+    SESSION = "session"        # crossed forearms: start / end a session (not a throw)
+
+    @property
+    def is_shot(self) -> bool:
+        return self not in (Gesture.NONE, Gesture.SESSION)
 
     @property
     def profile(self) -> str:
@@ -167,6 +174,19 @@ def arm_elevation_deg(lm: Sequence, shoulder: int, wrist: int, hip: int) -> floa
     return _angle_between(h.x - s.x, h.y - s.y, w.x - s.x, w.y - s.y)
 
 
+def arms_crossed(lm: Sequence) -> bool:
+    """
+    Forearms crossed in an X in front of the chest: each wrist has crossed
+    over to the other side of the body (its left/right order is the reverse
+    of the shoulders'), and both are between shoulder and hip height.
+    """
+    ls, rs, lw, rw = lm[P_L_SHOULDER], lm[P_R_SHOULDER], lm[P_L_WRIST], lm[P_R_WRIST]
+    top = min(ls.y, rs.y)
+    bottom = max(lm[P_L_HIP].y, lm[P_R_HIP].y)
+    swapped = (lw.x - rw.x) * (ls.x - rs.x) < 0
+    return swapped and all(top < w.y < bottom for w in (lw, rw))
+
+
 def classify_pose(lm: Sequence, cfg: GestureConfig) -> Gesture:
     """lm: 33 pose landmarks (.x .y .visibility)."""
     need = (P_L_SHOULDER, P_R_SHOULDER, P_L_WRIST, P_R_WRIST, P_L_HIP, P_R_HIP)
@@ -175,6 +195,9 @@ def classify_pose(lm: Sequence, cfg: GestureConfig) -> Gesture:
 
     left = arm_elevation_deg(lm, P_L_SHOULDER, P_L_WRIST, P_L_HIP)
     right = arm_elevation_deg(lm, P_R_SHOULDER, P_R_WRIST, P_R_HIP)
+
+    if arms_crossed(lm):
+        return Gesture.SESSION
 
     head_y = lm[P_NOSE].y
     both_up = (left >= cfg.arm_overhead_min_deg and right >= cfg.arm_overhead_min_deg
@@ -208,9 +231,10 @@ def combine(hand_gesture: Gesture, pose_gesture: Gesture) -> Gesture:
 # ---------------------------------------------------------------------------
 class GestureDebouncer:
     """
-    Emits a gesture once it has been seen `confirm_count` consecutive times,
-    then stays silent for `cooldown_sec` (and until the gesture changes), so
-    one held pose = one pass.
+    Emits a gesture once it has been seen `confirm_count` consecutive times
+    (`session_confirm_count` for SESSION, so it takes a longer hold), then
+    stays silent for `cooldown_sec` (and until the gesture changes), so one
+    held pose = one pass.
     """
 
     def __init__(self, cfg: GestureConfig):
@@ -231,11 +255,15 @@ class GestureDebouncer:
             return None
         if now < self._blocked_until or g is self._last_fired:
             return None
-        if self._count >= self.cfg.confirm_count:
+        if self._count >= self.needed(g):
             self._last_fired = g
             self._blocked_until = now + self.cfg.cooldown_sec
             return g
         return None
+
+    def needed(self, g: Gesture) -> int:
+        """Consecutive sightings needed before `g` fires."""
+        return self.cfg.session_confirm_count if g is Gesture.SESSION else self.cfg.confirm_count
 
     @property
     def progress(self) -> tuple:

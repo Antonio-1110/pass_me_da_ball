@@ -18,7 +18,7 @@ import dataclasses
 import math
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Iterable, Optional
 
 
 # ---------------------------------------------------------------------------
@@ -88,6 +88,8 @@ class GestureConfig:
     stable_bbox_px: float = 12.0     # centre+size change (lores px) counted as "stable"
     # A gesture must be seen this many consecutive gesture ticks to count.
     confirm_count: int = 3
+    # Crossed forearms start/end a session: needs a longer hold than a throw.
+    session_confirm_count: int = 6
     # Seconds to ignore gestures after a command was issued.
     cooldown_sec: float = 2.0
     # ROI padding around the body box (fraction of box size) before cropping
@@ -291,6 +293,7 @@ class AppConfig:
     headless: bool = False           # no preview window (Pi over SSH)
     require_on_target: bool = True   # only fire when the launcher turret is aimed
     reload_delay_s: float = 2.0      # time to reload a ball after the return move
+    players_dir: str = "configs/players"  # per-player profiles (see players.py)
     log_level: str = "INFO"
 
 
@@ -305,8 +308,8 @@ class WebConfig:
     # Fire buttons in the dashboard. Always available in dry run; in LIVE mode
     # only if this is true (anyone on the network could otherwise fire it).
     allow_fire_live: bool = False
-    # Optional shared secret: open http://pi:8080/?token=... once; empty = no check.
-    token: str = ""
+    # Dashboard login password; empty = no login (anyone on the network has full control).
+    password: str = ""
     save_path: str = "configs/live.yaml"  # where "Save" writes the tuned settings
 
 
@@ -439,11 +442,22 @@ def diff(current: dict, base: dict) -> dict:
     return out
 
 
-def save_config(cfg: "Config", path: str | Path) -> dict:
-    """Write everything that differs from the defaults to a YAML file."""
+def save_config(cfg: "Config", path: str | Path, exclude: Iterable[str] = ()) -> dict:
+    """
+    Write everything that differs from the defaults to a YAML file, minus the
+    dotted paths in `exclude` (e.g. command-line flags that must not stick).
+    """
     import yaml
 
     changed = diff(to_dict(cfg), to_dict(Config()))
+    for p in exclude:
+        *parents, leaf = p.split(".")
+        node = changed
+        for k in parents:
+            node = node.get(k) if isinstance(node, dict) else None
+        if isinstance(node, dict):
+            node.pop(leaf, None)
+    changed = {k: v for k, v in changed.items() if v != {}}
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8") as f:

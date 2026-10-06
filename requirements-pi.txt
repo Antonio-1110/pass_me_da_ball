@@ -1,8 +1,9 @@
-# Raspberry Pi OS Bookworm (64-bit), Python 3.11.
-# picamera2 comes from apt, NOT pip:
+# Raspberry Pi OS Bookworm (64-bit), Python 3.11:
 #   sudo apt install -y python3-picamera2 python3-opencv
 #   python3 -m venv --system-site-packages .venv && . .venv/bin/activate
 #   pip install -r requirements-pi.txt
+# Ubuntu: no apt picamera2; build Raspberry Pi's libcamera fork, then
+#   pip install -r requirements-pi.txt picamera2   (see README), or use a USB webcam (backend: opencv).
 numpy<2            # keep in step with apt's python3-opencv / picamera2 builds
 ultralytics        # YOLOv8 (export to NCNN for speed: see configs/rpi.yaml)
 ncnn               # runtime for the exported NCNN model

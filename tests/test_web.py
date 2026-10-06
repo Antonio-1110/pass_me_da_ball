@@ -12,6 +12,7 @@ import pytest
 import yaml
 
 from passer.config import Config, apply_overrides, field_docs, load_config
+from passer.players import PlayerStore
 from passer.web.server import WebServer
 
 
@@ -26,10 +27,12 @@ def web(tmp_path):
     cfg = Config()
     cfg.web.host, cfg.web.port = "127.0.0.1", free_port()
     cfg.web.save_path = str(tmp_path / "live.yaml")
-    actions = []
+    actions, session = [], {"on": False}
     srv = WebServer(cfg, lambda: {"mode": "DRY RUN"},
-                    lambda a: (actions.append(a) or True, f"{a} requested"))
-    srv.actions = actions
+                    lambda a: (actions.append(a) or True, f"{a} requested"),
+                    in_session=lambda: session["on"],
+                    players=PlayerStore(tmp_path / "players"))
+    srv.actions, srv.session = actions, session
     srv.start()
     srv.url = f"http://127.0.0.1:{cfg.web.port}"
     yield srv
@@ -77,7 +80,7 @@ def test_bad_updates_are_rejected_atomically(web):
 
 
 @pytest.mark.parametrize("patch", [{"app": {"dry_run": False}}, {"web": {"allow_fire_live": True}},
-                                   {"web": {"token": ""}}])
+                                   {"web": {"password": ""}}])
 def test_safety_settings_are_read_only(web, patch):
     code, r = call(web, "/api/config", patch)
     assert code == 403
@@ -119,12 +122,57 @@ def test_save_writes_only_changes_and_reloads(web):
     assert load_config(web.cfg.web.save_path).launcher.arm_length_m == 0.7
 
 
-def test_token_required_when_set(web):
-    web.cfg.web.token = "s3cret"
+def test_password_login(web):
+    web.cfg.web.password = "s3cret"
+    with urllib.request.urlopen(web.url + "/", timeout=3) as r:
+        page = r.read()
+    assert b"password" in page and b"Passer Control" in page and b"api/config" not in page
     assert call(web, "/api/status")[0] == 401
-    assert call(web, "/api/status?token=s3cret")[0] == 200
-    assert call(web, "/api/status", headers={"Cookie": "token=s3cret"})[0] == 200
     assert call(web, "/api/config", {"launcher": {"arm_length_m": 1}})[0] == 401
+    assert call(web, "/api/status", headers={"Cookie": "sid=guess"})[0] == 401
+    assert call(web, "/api/login", {"password": "nope"})[0] == 401
+
+    req = urllib.request.Request(web.url + "/api/login", json.dumps({"password": "s3cret"}).encode(),
+                                 {"Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=3) as r:
+        cookie = r.headers["Set-Cookie"]
+    assert "HttpOnly" in cookie
+    auth = {"Cookie": cookie.split(";")[0]}
+    code, st = call(web, "/api/status", headers=auth)
+    assert code == 200 and st["login_required"] is True
+    code, c = call(web, "/api/config", headers=auth)
+    assert code == 200 and "password" not in c["values"]["web"]     # never sent to the browser
+    assert call(web, "/api/logout", {}, headers=auth)[0] == 200
+    assert call(web, "/api/status", headers=auth)[0] == 401
+
+
+def test_settings_locked_during_a_session(web):
+    web.session["on"] = True
+    code, r = call(web, "/api/config", {"launcher": {"calibration": {"speed_scale": 1.1}}})
+    assert code == 403 and "session" in r["error"]
+    assert web.cfg.launcher.calibration.speed_scale == 1.0
+    assert call(web, "/api/action", {"action": "session_end"})[0] == 200
+    web.session["on"] = False
+    assert call(web, "/api/config", {"launcher": {"calibration": {"speed_scale": 1.1}}})[0] == 200
+
+
+def test_hard_limits_locked_in_live(web):
+    web.cfg.app.dry_run = False
+    code, r = call(web, "/api/config", {"launcher": {"max_motor_rpm": 9000}})
+    assert code == 403 and web.cfg.launcher.max_motor_rpm == 3000
+    assert call(web, "/api/config", {"launcher": {"calibration": {"speed_scale": 1.05}}})[0] == 200
+    assert "launcher.max_motor_rpm" in call(web, "/api/config")[1]["read_only"]
+
+
+def test_save_never_keeps_live_mode_or_cli_flags(web):
+    web.cfg.app.dry_run = False                       # started with --live
+    web.cfg.app.headless = True                       # and --headless
+    web.save_exclude |= {"app.headless"}
+    call(web, "/api/config", {"launcher": {"calibration": {"speed_scale": 1.05}}})
+    assert call(web, "/api/config/save", {})[0] == 200
+    saved = yaml.safe_load(open(web.cfg.web.save_path))
+    assert "app" not in saved
+    assert load_config(web.cfg.web.save_path).app.dry_run is True
 
 
 def test_mjpeg_stream_serves_frames_and_counts_viewers(web):
@@ -167,3 +215,26 @@ def test_field_docs_cover_key_settings():
     for k in ("launcher.arm_length_m", "launcher.calibration.speed_scale",
               "launcher_axis.fire_latency_s", "profile.launch_angle_deg"):
         assert d.get(k), k
+
+
+def test_player_profiles_api(web):
+    code, r = call(web, "/api/players")
+    assert code == 200 and r["players"] == [] and r["selected"] is None
+    assert r["base"]["passes"]["lob"]["launch_angle_deg"] == 55.0
+    code, r = call(web, "/api/players", {"name": "Ana", "person_height_m": 1.6,
+                                         "passes": {"chest": {"target_height_m": 1.2}}})
+    assert code == 200 and r["player"]["id"] == "ana"
+    assert call(web, "/api/players", {"name": "Bo", "person_height_m": 9})[0] == 400
+    assert call(web, "/api/players", {"name": "Bo", "max_motor_rpm": 9000})[0] == 400
+    assert call(web, "/api/players/select", {"id": "ana"})[0] == 200
+    assert call(web, "/api/players")[1]["selected"] == "ana"
+    assert call(web, "/api/players/select", {"id": "../etc"})[0] == 400
+    assert web.cfg.distance.person_height_m == 1.75          # only applied when a session starts
+    assert call(web, "/api/players/delete", {"id": "ana"})[0] == 200
+    assert call(web, "/api/players")[1] == {**call(web, "/api/players")[1], "players": [], "selected": None}
+
+
+def test_no_save_during_a_session(web):
+    web.session["on"] = True
+    code, r = call(web, "/api/config/save", {})
+    assert code == 403 and "session" in r["error"]
