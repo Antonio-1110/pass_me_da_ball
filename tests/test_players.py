@@ -82,3 +82,23 @@ def test_session_applies_selected_player_and_restores_after(tmp_path):
     m.players.select(None)                                # machine settings only
     m._start_session(0.0, "test")
     assert m.session_player is None and cfg.distance.person_height_m == 1.75
+
+
+def test_shutdown_ends_session_and_stops_drive(tmp_path):
+    from unittest.mock import Mock
+
+    from passer.app import PassingMachine
+    from passer.controller import MachineController
+    from passer.hardware import ps100_registers as R
+
+    cfg = Config()
+    cfg.app.headless = True
+    m = PassingMachine.__new__(PassingMachine)
+    m.cfg, m.ctl, m.web, m.pipeline, m.camera = cfg, MachineController.from_config(cfg), None, Mock(), Mock()
+    m.players, m._player_restore, m.session_player = PlayerStore(tmp_path), None, None
+    m.pipeline.stop.side_effect = RuntimeError("boom")    # one failing step must not skip the rest
+    m._start_session(0.0, "test")
+    m.shutdown()
+    assert not m.ctl.session_active
+    assert (R.REG_VIRTUAL_INPUT_CONTROL, R.CONTROL_POSITION_STOP) in m.ctl.launcher.drive.t.writes
+    m.camera.stop.assert_called_once()

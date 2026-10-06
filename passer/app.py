@@ -26,6 +26,7 @@ from __future__ import annotations
 import argparse
 import logging
 import queue
+import signal
 import time
 from typing import Iterable, Optional
 
@@ -257,7 +258,9 @@ class PassingMachine:
                     self.ctl.launcher.reset()
                 elif key == ord("s"):
                     self.ctl.launcher.stop()
-            else:  # camera thread gave up (not a 'q' quit)
+            else:  # camera thread gave up (not a 'q' quit): can't see players any more
+                self._end_session("camera lost")
+                self._stop_drive("camera lost")
                 if self.web:
                     self._show_fault("Camera stopped delivering frames (see the log)")
         except KeyboardInterrupt:
@@ -273,15 +276,32 @@ class PassingMachine:
         while True:
             time.sleep(0.5)
 
+    def _stop_drive(self, why: str) -> None:
+        try:
+            self.ctl.launcher.stop()
+            log.info("Drive stop sent (%s)", why)
+        except Exception:
+            log.exception("Drive stop FAILED (%s) -- use the emergency stop", why)
+
     def shutdown(self) -> None:
-        if self.web:
-            self.web.stop()
-        self.pipeline.stop()
-        self.camera.stop()
-        self.ctl.turret.close()
+        """Leave the machine safe: no session, drive stopped, then release everything."""
+        self._end_session("shutdown")
+        self._stop_drive("shutdown")
+        for step in ((self.web.stop if self.web else None), self.pipeline.stop,
+                     self.camera.stop, self.ctl.turret.close):
+            try:
+                if step:
+                    step()
+            except Exception:
+                log.exception("shutdown step failed")
         if not self.cfg.app.headless:
             import cv2
             cv2.destroyAllWindows()
+
+
+def _interrupt(signum, frame):
+    """SIGTERM (systemd, kill) and SIGHUP (SSH dropped) shut down like Ctrl+C."""
+    raise KeyboardInterrupt
 
 
 def parse_args(argv=None):
@@ -315,7 +335,11 @@ def main(argv=None) -> None:
     cli_paths = _paths(overrides)   # flags, so the dashboard's Save never keeps them
     logging.basicConfig(level=cfg.app.log_level,
                         format="%(asctime)s %(levelname)-7s %(name)s: %(message)s")
-    PassingMachine(cfg, cli_paths).run()
+    machine = PassingMachine(cfg, cli_paths)
+    # after loading the models: MediaPipe's absl installs its own SIGTERM handler
+    signal.signal(signal.SIGTERM, _interrupt)
+    signal.signal(signal.SIGHUP, _interrupt)
+    machine.run()
 
 
 if __name__ == "__main__":

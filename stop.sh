@@ -7,7 +7,9 @@
 #   ./stop.sh
 set -uo pipefail
 
-pids=$(pgrep -u "$(id -u)" -f -- "-m passer\.app") || { echo "Not running."; exit 0; }
+# Anchored to the start of the command line, so only a python process running
+# the app matches -- not a shell or editor whose command merely mentions it.
+pids=$(pgrep -u "$(id -u)" -f -- '^[^ ]*python[^ ]* -m passer\.app( |$)') || { echo "Not running."; exit 0; }
 
 wait_gone() {   # wait up to $1 seconds for every pid to exit
     for _ in $(seq $(( $1 * 10 ))); do
