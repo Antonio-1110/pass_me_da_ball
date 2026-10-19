@@ -269,6 +269,9 @@ class LauncherConfig:
 @dataclass
 class PS100Config:
     port: str = "/dev/ttyUSB0"
+    # Moves are planned with + = arm toward the throw. True if the motor turns
+    # the arm the other way for a positive move (gearbox/mounting).
+    reverse_direction: bool = False
     slave_id: int = 1
     baudrate: int = 9600
     parity: str = "N"

@@ -44,6 +44,7 @@ launcher:
 
 ps100:
   port: /dev/ttyUSB0        # or a stable /dev/serial/by-id/... path
+  reverse_direction: true   # measured: a positive move turns the arm away from the throw
 
 app:
   dry_run: true

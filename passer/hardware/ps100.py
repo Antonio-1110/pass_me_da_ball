@@ -192,6 +192,8 @@ class PS100:
             raise ValueError("turns and pulses must have the same sign")
         if abs(pulses) >= R.PULSES_PER_REV:
             raise ValueError(f"pulses {pulses} must be < {R.PULSES_PER_REV} per turn")
+        if self.cfg.reverse_direction:
+            turns, pulses = -turns, -pulses
         self.t.write_register(R.REG_POSITION_TURNS, self._check_i16("turns", turns))
         self.t.write_register(R.REG_POSITION_PULSES, self._check_i16("pulses", pulses))
         self.t.write_register(R.REG_POSITION_SPEED, self._check_i16("rpm", rpm))

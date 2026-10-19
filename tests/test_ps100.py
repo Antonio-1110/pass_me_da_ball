@@ -58,6 +58,14 @@ def test_timeout_scales_with_long_moves():
     assert drive.move(0, 100, 30, est_time_s=0.3)        # 0.05 s alone would time out
 
 
+def test_reverse_direction_negates_the_move_only():
+    t = SimTransport(move_time_s=0.01)
+    drive = PS100(t, PS100Config(reverse_direction=True))
+    assert drive.move(2, 5000, 300)
+    assert t.writes[:3] == [(R.REG_POSITION_TURNS, -2), (R.REG_POSITION_PULSES, -5000),
+                            (R.REG_POSITION_SPEED, 300)]
+
+
 def test_completion_by_time():
     drive, _ = make("time")
     assert drive.move(0, 100, 100, est_time_s=0.01)
