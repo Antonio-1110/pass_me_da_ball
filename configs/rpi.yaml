@@ -43,7 +43,7 @@ launcher:
   decel_ms_per_1000rpm: 100
 
 ps100:
-  home_rotor_counts: 122298     # rotor angle at home, set by 'ps100_cli home --set'
+  home_rotor_counts: 35320     # rotor angle at home, set by 'ps100_cli home --set'
   port: /dev/ttyUSB0        # or a stable /dev/serial/by-id/... path
   reverse_direction: true   # measured: a positive move turns the arm away from the throw
 
