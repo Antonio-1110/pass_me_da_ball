@@ -102,10 +102,10 @@ def test_runtime_registers_follow_the_address_rule():
 def test_check_settings_flags_mismatches():
     drive, t = make()
     for name, expected, _ in R.REQUIRED_SETTINGS:
-        t.registers[R.param_address(name)] = expected[0] if isinstance(expected, tuple) else expected
+        t.registers[R.param_address(name)] = expected
     t.registers[R.param_address("P3-38")] = 0
     rows = {name: (expected, actual) for name, expected, actual, _ in drive.check_settings()}
-    assert rows["P3-38"] == ((28, 38), 0)
+    assert rows["P3-38"] == (28, 0)
     assert rows["PA14"] == (3, 3)
     assert rows["PA40"][0] is None
 

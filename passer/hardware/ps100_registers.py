@@ -40,9 +40,11 @@ PULSES_PER_REV = 10_000
 # ----------------------------
 
 REG_MOTOR_SPEED = 0x1000
-REG_POSITION = 0x1001             # 2 words, low first: current position, pulses
-REG_POSITION_COMMAND = 0x1003     # 2 words: position command, pulses
-REG_POSITION_ERROR = 0x1005       # 2 words: following error, pulses
+# Positions below are in ENCODER counts (17-bit: 131072 per motor rev),
+# not the 10000 command pulses per rev used for moves.
+REG_POSITION = 0x1001             # 2 words, low first: current position
+REG_POSITION_COMMAND = 0x1003     # 2 words: position command
+REG_POSITION_ERROR = 0x1005       # 2 words: following error
 REG_CONTROL_MODE = 0x1009         # same codes as PA4
 REG_INPUT_STATUS = 0x100F         # DI terminals, bit 0 = DI1 (virtual inputs show here too)
 REG_OUTPUT_STATUS = 0x1010        # DO terminals, bit 0 = DO1
@@ -55,9 +57,9 @@ REG_ABS_POSITION = 0x1018         # 4 words, low first: encoder absolute positio
 # (first register, words, label) for `ps100_cli monitor`, read in one request.
 MONITOR = [
     (0x1000, 1, "motor speed, rpm"),
-    (0x1001, 2, "current position, pulses"),
-    (0x1003, 2, "position command, pulses"),
-    (0x1005, 2, "position error, pulses"),
+    (0x1001, 2, "current position, encoder counts"),
+    (0x1003, 2, "position command, encoder counts"),
+    (0x1005, 2, "position error, encoder counts"),
     (0x1007, 1, "motor torque"),
     (0x1008, 1, "motor current"),
     (0x1009, 1, "control mode (PA4 codes: 0 = position)"),
@@ -111,9 +113,9 @@ REQUIRED_SETTINGS = [
     ("PA14", 3, "position command source: 3 = internal position"),
     ("PA53", 1, "servo enable: 1 = forced on (no external enable wire)"),
     ("P3-30", 1, "virtual input terminals: 1 = controlled by 0x011F"),
-    # The RS-485 sections of the manual say 38; the push-button version of the
-    # same move uses 28 (next to stop = 27). Accept either until one is proven.
-    ("P3-38", (28, 38), "virtual DI1 function: internal-position start"),
+    # 28, as in the manual's push-button version of this move. Its RS-485
+    # sections say 38, which the drive accepts but never starts a move with.
+    ("P3-38", 28, "virtual DI1 function: 28 = internal-position start"),
     ("P3-39", 27, "virtual DI2 function: 27 = internal-position stop (software stop)"),
     ("P3-20", 16, "DO1 function: 16 = positioning complete (bit 0 of 0x1010)"),
     ("P4-0", 1, "internal-position mode: 1 = relative"),
