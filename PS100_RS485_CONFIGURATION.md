@@ -409,3 +409,114 @@ Before commanding significant motion, verify these points on the actual hardware
 7. Safe acceleration, speed, torque, and mechanical travel limits for the throwing mechanism.
 
 Start testing with the throwing arm mechanically unloaded or otherwise made safe, at low speed and small displacement.
+
+---
+
+## 13. Parameter Addressing
+
+Every parameter can be read (and written) over Modbus. The manuals give
+addresses for a handful of parameters, and all of them follow one rule:
+
+```text
+address = group base + parameter number (decimal)
+
+PA (FA) group  base 0x0000    PA14  -> 0x000E
+P3 group       base 0x0100    P3-38 -> 0x0126
+P4 group       base 0x0200    P4-0  -> 0x0200
+```
+
+Documented pairs that confirm it: PA21 → `0x0015`, PA24 → `0x0018`,
+PA25 → `0x0019`, PA50 → `0x0032`, PA64 → `0x0040`, PA65 → `0x0041`,
+P3-31 → `0x011F`, P3-34 → `0x0122`, P4-2..P4-4 → `0x0202..0x0204`.
+Addresses for other parameters are inferred from the rule.
+
+`passer.hardware.ps100_registers.param_address("P3-38")` applies it, and
+`ps100_cli read P3-38` reads a parameter by name.
+
+Settings the RS-485 move depends on (`ps100_cli check` reads all of them):
+
+| Parameter | Address | Needs | Meaning |
+|---|---|---:|---|
+| PA4 | `0x0004` | 0 | Control mode: position |
+| PA11 | `0x000B` | 10000 | Command pulses per motor revolution |
+| PA14 | `0x000E` | 3 | Position command source: internal position |
+| PA53 | `0x0035` | 1 | Servo forced on (no external enable wire) |
+| P3-30 | `0x011E` | 1 | Virtual input terminals controlled by `0x011F` |
+| P3-38 | `0x0126` | 38 | Virtual DI1 = internal-position start |
+| P3-39 | `0x0127` | 27 | Virtual DI2 = internal-position stop |
+| P3-20 | `0x0114` | 16 | DO1 = positioning complete (bit 0 of `0x1010`) |
+| P4-0 | `0x0200` | 1 | Internal-position mode: relative (0 = absolute) |
+| PA71 | `0x0047` | 1 | Modbus slave address |
+| PA72 | `0x0048` | 96 | Baud rate / 100 |
+| PA73 | `0x0049` | 3 | Frame format 8N1 |
+
+Also worth reading when a move misbehaves: PA20 (`0x0014`, drive-prohibit
+inputs; 1 = ignored), PA23 (`0x0017`, max speed), PA40/PA41 (`0x0028`/`0x0029`,
+ramps), PA74 (`0x004A`, on comms error: 0 = keep running, 1 = alarm and stop),
+and P4-2..P4-4 (the move currently loaded).
+
+`0x011F` is a bit field over the virtual inputs, `DI4 DI3 DI2 DI1`. The
+manual writes the values as bit strings: `0001` = DI1 (start), `0010` = DI2
+(stop). The code writes `0x0001` and `0x0002`.
+
+## 14. Status and Monitoring
+
+| What | Where | Notes |
+|---|---|---|
+| Positioning complete | `0x1010` bit 0 | Only with P3-20 = 16. The manual says to watch for a *change*; see §7 |
+| Encoder absolute position | `0x1018..0x101B` | 64-bit, low word first (with P3-37 = 0). `ps100_cli pos` reads it. Raw encoder units: compare readings to see whether the motor moved |
+| Clear encoder position | write 0 to `0x0122` (P3-34) | Needs P3-36 = 1 to clear single- and multi-turn. Not used by the code |
+| Motor speed, current, pulses, position | Panel `dP-` menu: `F-spd`, `F-I`, `F-cpo`, `F-apo` | Front panel only |
+| Current alarm | Panel display | **No Modbus register is documented** for the alarm number or servo-on state |
+
+`ps100_cli arm` prints the encoder position before and after the move, so a
+missing completion signal can be told apart from a motor that never moved.
+
+## 15. Alarm Codes
+
+From the quick manual's alarm table (报警代码). `ps100_cli alarm <n>` prints
+the same text. Clear an alarm by fixing its cause, then power-cycle (or set
+PA61 = 1).
+
+| No. | Alarm | Likely cause here |
+|---:|---|---|
+| 1 | Overspeed | Speed above limit |
+| 2 / 3 | Main circuit over / undervoltage | Supply problem |
+| 4 | Position following error > PA17 | Arm too heavy for the ramp or speed, or gains too low |
+| 5 | Drive overheated | |
+| 6 | Speed amplifier saturated | Load too heavy for the commanded speed |
+| 7 | Drive-prohibit inputs both off | Set PA20 = 1 to ignore the limit inputs |
+| 8 | Position counter overflow | |
+| 11 | IPM module fault | Power stage |
+| 13 | Drive/motor overload | |
+| 14 | Braking circuit fault | Check the P–D jumper / brake resistor |
+| 18 | Relay state mismatch | |
+| 19 | Brake delay error | Pulses while the brake was closed |
+| 20 | EEPROM error | |
+| 21 | FPGA fault | |
+| 23 | Current sensing fault | |
+| 29 | User torque overload | PA30 / PA31 |
+| 38 | Encoder read/write failed | Encoder cable |
+| 39 | Encoder data CRC error | |
+| 40 / 41 | Motor model unsupported / differs | |
+| 42 | AC input too low | |
+| 47 | Main voltage too high at power-up | |
+| 50 / 51 | No / lost encoder communication | Encoder cable |
+| 52 | Encoder battery low | |
+| 53 | Encoder battery error, data lost | Normal on first connection of a multi-turn motor: clear with `F-c r` |
+| 54 / 59 | Encoder error | Reset the encoder |
+| 55 | Encoder CRC failed 3 times | |
+| 56 | Modbus frame too long | |
+| 57 | Modbus format error | Comms settings, register address or value not accepted |
+| 58 | Single-turn offset out of range | |
+
+## 16. When a Move Fails
+
+1. **Look at the drive display.** If it shows an alarm number, look it up in §15.
+2. **`ps100_cli status`.** If this times out, it's the link: wiring (A/B swap), PA71–PA73, `ps100.port`.
+3. **`ps100_cli check`.** Fix every `FIX` line on the panel, save (long-press SET), and power-cycle. P3-30 = 1 and P3-38 = 38 are the usual missing pair: without them the trigger write is accepted but nothing moves.
+4. **`ps100_cli read P4-4`** after a move. If it doesn't show the speed you sent, writes are landing on the wrong address: try `ps100.address_offset: -1`.
+5. **`ps100_cli arm 10 --rpm 30`.** Read the result line:
+   - `done`: working.
+   - `motor moved but no completion signal`: set P3-20 = 16, or `ps100.completion_mode: time`.
+   - `motor did not move`: settings or alarm (steps 1 and 3), or the servo isn't enabled (PA53).

@@ -1,8 +1,11 @@
 """
 Bench tool for the PS100 over RS-485. Start with the arm unloaded / safe!
 
+    python -m passer.tools.ps100_cli check                  # read every setting the move needs
     python -m passer.tools.ps100_cli status
-    python -m passer.tools.ps100_cli read 0x0204
+    python -m passer.tools.ps100_cli pos                    # encoder position (did it move?)
+    python -m passer.tools.ps100_cli read 0x0204            # or a name: read P3-38
+    python -m passer.tools.ps100_cli alarm 57               # what the code on the display means
     python -m passer.tools.ps100_cli arm 30 --rpm 60        # arm +30 deg at 60 MOTOR rpm
     python -m passer.tools.ps100_cli arm -30 --rpm 60       # and back
     python -m passer.tools.ps100_cli throw 4 --type chest   # full plan + return
@@ -10,6 +13,9 @@ Bench tool for the PS100 over RS-485. Start with the arm unloaded / safe!
 
 Add --dry-run to print the register writes without a drive attached, and
 --port /dev/ttyUSB1 etc. to override the config.
+
+Register meanings, alarm codes and a checklist for a move that fails are in
+PS100_RS485_CONFIGURATION.md (sections 13-16).
 """
 
 import argparse
@@ -28,9 +34,13 @@ def main(argv=None):
     ap.add_argument("--port")
     ap.add_argument("--dry-run", action="store_true")
     sub = ap.add_subparsers(dest="cmd", required=True)
+    sub.add_parser("check", help="read every drive setting the RS-485 move depends on")
     sub.add_parser("status")
+    sub.add_parser("pos", help="encoder absolute position (raw counts)")
     r = sub.add_parser("read")
-    r.add_argument("register", type=lambda s: int(s, 0))
+    r.add_argument("register", type=parse_register, help="0x0204, or a parameter name like P3-38")
+    al = sub.add_parser("alarm", help="explain an alarm number shown on the drive display")
+    al.add_argument("code", type=int)
     a = sub.add_parser("arm", help="relative ARM move in degrees (gearbox applied)")
     a.add_argument("degrees", type=float)
     a.add_argument("--rpm", type=int, default=60, help="MOTOR rpm")
@@ -40,6 +50,10 @@ def main(argv=None):
     sub.add_parser("stop")
     args = ap.parse_args(argv)
 
+    if args.cmd == "alarm":
+        print(f"alarm {args.code}: {R.ALARM_CODES.get(args.code, 'not in the manual table')}")
+        return
+
     logging.basicConfig(level=logging.DEBUG if args.dry_run else logging.INFO,
                         format="%(levelname)s %(message)s")
     cfg = load_config(args.config)
@@ -47,9 +61,15 @@ def main(argv=None):
         cfg.ps100.port = args.port
     drive = PS100.from_config(cfg.ps100, dry_run=args.dry_run)
 
-    if args.cmd == "status":
+    if args.cmd == "check":
+        bad = print_check(drive.check_settings())
+        print(f"{bad} setting(s) differ from what the RS-485 move needs" if bad
+              else "all required settings match")
+    elif args.cmd == "status":
         v = drive.t.read_register(R.REG_OUTPUT_STATUS)
         print(f"0x{R.REG_OUTPUT_STATUS:04X} = 0x{v:04X} (bit0={v & 1})")
+    elif args.cmd == "pos":
+        print(f"position = {drive.read_position()}")
     elif args.cmd == "read":
         v = drive.t.read_register(args.register)
         print(f"0x{args.register:04X} = {v} (0x{v:04X})")
@@ -57,8 +77,21 @@ def main(argv=None):
         lc = cfg.launcher
         total = arm_degrees_to_motor_pulses(args.degrees, lc.gear_ratio, lc.pulses_per_rev)
         turns, pulses = split_pulses(total, lc.pulses_per_rev)
+        before = try_position(drive)
         ok = drive.move(turns, pulses, args.rpm)
-        print("done" if ok else "no completion signal (check P3-20=16 / completion_mode)")
+        after = try_position(drive)
+        moved = None if before is None or after is None else after != before
+        if moved is not None:
+            print(f"position {before} -> {after} (change {after - before})")
+        if ok:
+            print("done")
+        elif moved:
+            print("motor moved but no completion signal: check P3-20 = 16, "
+                  "or set ps100.completion_mode to 'time'")
+        elif moved is False:
+            print("motor did not move: run 'check' and look at the drive display for an alarm")
+        else:
+            print("no completion signal: run 'check', 'pos' and look at the drive display")
     elif args.cmd == "throw":
         plan = plan_launch(args.distance, args.type, cfg.launcher)
         print(plan.summary())
@@ -69,6 +102,39 @@ def main(argv=None):
 
     if isinstance(drive.t, SimTransport):
         print("register writes:", ", ".join(f"0x{a:04X}<-{v}" for a, v in drive.t.writes))
+
+
+def parse_register(text: str) -> int:
+    try:
+        return int(text, 0)
+    except ValueError:
+        return R.param_address(text)
+
+
+def try_position(drive):
+    try:
+        return drive.read_position()
+    except Exception as e:
+        logging.warning("could not read the encoder position: %s", e)
+        return None
+
+
+def print_check(rows) -> int:
+    """Print the settings table; return how many required settings differ."""
+    bad = 0
+    for name, expected, actual, what in rows:
+        if actual is None:
+            mark, want = "??? ", " (read failed)"
+            bad += expected is not None
+        elif expected is None:
+            mark, want = "    ", ""
+        elif actual == expected:
+            mark, want = "ok  ", ""
+        else:
+            mark, want = "FIX ", f" (needs {expected})"
+            bad += 1
+        print(f"{mark}{name:<6} 0x{R.param_address(name):04X} = {actual}{want}  {what}")
+    return bad
 
 
 if __name__ == "__main__":

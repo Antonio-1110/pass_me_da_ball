@@ -128,6 +128,38 @@ class PS100:
     def status_bit(self) -> int:
         return (self.t.read_register(R.REG_OUTPUT_STATUS) >> R.POSITION_COMPLETE_BIT) & 1
 
+    def read_param(self, name: str) -> int:
+        """Read a drive parameter by name ('PA14', 'P3-38'), as signed 16-bit."""
+        v = self.t.read_register(R.param_address(name))
+        return v - 0x10000 if v >= 0x8000 else v
+
+    def read_position(self) -> int:
+        """
+        Encoder absolute position from 0x1018..0x101B (low word first),
+        as a signed 64-bit count. Raw encoder units: compare two readings
+        to see whether, and which way, the motor moved.
+        """
+        words = [self.t.read_register(R.REG_ABS_POSITION_WORD_0 + i) for i in range(4)]
+        value = sum((w & 0xFFFF) << (16 * i) for i, w in enumerate(words))
+        return value - (1 << 64) if value >= (1 << 63) else value
+
+    def check_settings(self) -> List[Tuple[str, Optional[int], Optional[int], str]]:
+        """
+        Read every parameter the RS-485 move depends on.
+        Returns (name, expected or None, actual or None if unreadable, description).
+        """
+        wanted = [(n, e, w) for n, e, w in R.REQUIRED_SETTINGS]
+        wanted += [(n, None, w) for n, w in R.INFO_SETTINGS]
+        rows: List[Tuple[str, Optional[int], Optional[int], str]] = []
+        for name, expected, what in wanted:
+            try:
+                actual: Optional[int] = self.read_param(name)
+            except Exception as e:  # one unreadable parameter shouldn't hide the rest
+                log.warning("could not read %s: %s", name, e)
+                actual = None
+            rows.append((name, expected, actual, what))
+        return rows
+
     # -- motion ------------------------------------------------------------
     def load_move(self, turns: int, pulses: int, rpm: int) -> None:
         """Write the three move registers (does not start motion)."""
