@@ -91,6 +91,7 @@ class SimTransport:
         self.writes: List[Tuple[int, int]] = []
         self.move_time_s = move_time_s
         self._done_at: Optional[float] = None
+        self.rotor = 0     # encoder angle within one turn, like 0x100D
 
     def write_register(self, address: int, value: int) -> None:
         if not -32768 <= value <= 65535:
@@ -103,6 +104,14 @@ class SimTransport:
                 and value == R.CONTROL_POSITION_TRIGGER):
             self._done_at = time.monotonic() + self.move_time_s
             self.registers[R.REG_OUTPUT_STATUS] &= ~(1 << R.POSITION_COMPLETE_BIT)
+            pulses = (self.registers.get(R.REG_POSITION_TURNS, 0) * R.PULSES_PER_REV
+                      + self.registers.get(R.REG_POSITION_PULSES, 0))
+            self.set_rotor(self.rotor + round(pulses * R.ENCODER_COUNTS_PER_REV / R.PULSES_PER_REV))
+
+    def set_rotor(self, counts: int) -> None:
+        self.rotor = counts % R.ENCODER_COUNTS_PER_REV
+        self.registers[R.REG_ROTOR_ANGLE] = self.rotor & 0xFFFF
+        self.registers[R.REG_ROTOR_ANGLE + 1] = self.rotor >> 16
 
     def read_register(self, address: int) -> int:
         if self._done_at is not None and time.monotonic() >= self._done_at:
@@ -157,6 +166,10 @@ class PS100:
         to see whether, and which way, the motor moved.
         """
         return _words(self.t.read_registers(R.REG_ABS_POSITION, 4))
+
+    def rotor_angle(self) -> int:
+        """Encoder angle within one motor revolution (0..131071), kept through power-off."""
+        return _words(self.t.read_registers(R.REG_ROTOR_ANGLE, 2) + [0])
 
     def monitor(self) -> List[Tuple[int, str, int]]:
         """Every status register (RS485 manual 1.5) from one read: (address, label, value)."""

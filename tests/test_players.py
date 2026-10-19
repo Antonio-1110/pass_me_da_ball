@@ -102,3 +102,19 @@ def test_shutdown_ends_session_and_stops_drive(tmp_path):
     assert not m.ctl.session_active
     assert (R.REG_VIRTUAL_INPUT_CONTROL, R.CONTROL_POSITION_STOP) in m.ctl.launcher.drive.t.writes
     m.camera.stop.assert_called_once()
+
+
+def test_live_session_refused_unless_the_arm_is_at_home(tmp_path):
+    from passer.app import PassingMachine
+    from passer.controller import MachineController
+
+    cfg = Config()
+    m = PassingMachine.__new__(PassingMachine)
+    m.cfg, m.ctl = cfg, MachineController.from_config(cfg)       # simulated drive
+    m.players, m._player_restore, m.session_player = PlayerStore(tmp_path), None, None
+    cfg.app.dry_run = False                                       # as if LIVE
+    m._start_session(0.0, "test")
+    assert not m.ctl.session_active and "not calibrated" in m.ctl.status
+    cfg.ps100.home_rotor_counts = m.ctl.launcher.drive.rotor_angle()
+    m._start_session(0.0, "test")
+    assert m.ctl.session_active

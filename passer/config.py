@@ -272,6 +272,9 @@ class PS100Config:
     # Moves are planned with + = arm toward the throw. True if the motor turns
     # the arm the other way for a positive move (gearbox/mounting).
     reverse_direction: bool = False
+    # Rotor angle (0x100D) with the arm exactly at home; see homing.py.
+    # None = not calibrated: LIVE sessions are refused.
+    home_rotor_counts: Optional[int] = None
     slave_id: int = 1
     baudrate: int = 9600
     parity: str = "N"

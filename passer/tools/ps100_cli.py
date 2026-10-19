@@ -7,6 +7,9 @@ Bench tool for the PS100 over RS-485. Start with the arm unloaded / safe!
     python -m passer.tools.ps100_cli pos                    # encoder position (did it move?)
     python -m passer.tools.ps100_cli read 0x0204            # or a name: read P3-38
     python -m passer.tools.ps100_cli alarm 57               # what the code on the display means
+    python -m passer.tools.ps100_cli home --set             # arm EXACTLY at home: record it
+    python -m passer.tools.ps100_cli home                   # after power-up: arm near home -> exact
+    python -m passer.tools.ps100_cli home --check           # how far from home is it?
     python -m passer.tools.ps100_cli arm 30 --rpm 60        # arm +30 deg at 60 MOTOR rpm
     python -m passer.tools.ps100_cli arm -30 --rpm 60       # and back
     python -m passer.tools.ps100_cli throw 4 --type chest   # full plan + return
@@ -27,6 +30,7 @@ from ..config import load_config
 from ..hardware import ps100_registers as R
 from ..hardware.ps100 import PS100, SimTransport
 from ..kinematics import arm_degrees_to_motor_pulses, plan_launch, split_pulses
+from ..homing import at_home, home, save_home
 from ..launcher import Launcher
 
 
@@ -51,6 +55,9 @@ def main(argv=None):
     r.add_argument("register", type=parse_register, help="0x0204, or a parameter name like P3-38")
     al = sub.add_parser("alarm", help="explain an alarm number shown on the drive display")
     al.add_argument("code", type=int)
+    h = sub.add_parser("home", help="move the arm to home with the encoder (place it within ~15 deg first)")
+    h.add_argument("--set", action="store_true", help="the arm is exactly at home: record the encoder angle")
+    h.add_argument("--check", action="store_true", help="only report how far the arm is from home")
     a = sub.add_parser("arm", help="relative ARM move in degrees (gearbox applied)")
     a.add_argument("degrees", type=float)
     a.add_argument("--rpm", type=int, default=60, help="MOTOR rpm")
@@ -116,6 +123,19 @@ def main(argv=None):
         print(plan.summary())
         if plan.ok:
             Launcher(drive, cfg.launcher, reload_delay_s=0).fire(plan, block=True)
+    elif args.cmd == "home":
+        if args.set:
+            counts = drive.rotor_angle()
+            if args.config and not args.dry_run:
+                save_home(args.config, counts)
+                print(f"home set: rotor angle {counts} saved to {args.config}")
+            else:
+                print(f"rotor angle {counts} (not saved: dry run or no config file)")
+        elif args.check:
+            print(at_home(drive, cfg)[1])
+        else:
+            before, after = home(drive, cfg)
+            print(f"homed: arm was {before:+.2f} deg from home, now {after:+.2f}")
     elif args.cmd == "stop":
         drive.stop()
 

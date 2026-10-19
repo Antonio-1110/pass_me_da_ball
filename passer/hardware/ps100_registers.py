@@ -46,6 +46,8 @@ REG_POSITION = 0x1001             # 2 words, low first: current position
 REG_POSITION_COMMAND = 0x1003     # 2 words: position command
 REG_POSITION_ERROR = 0x1005       # 2 words: following error
 REG_CONTROL_MODE = 0x1009         # same codes as PA4
+REG_ROTOR_ANGLE = 0x100D          # 2 words: angle within one motor turn; survives power-off
+ENCODER_COUNTS_PER_REV = 131_072  # 17-bit (PA95 = 17)
 REG_INPUT_STATUS = 0x100F         # DI terminals, bit 0 = DI1 (virtual inputs show here too)
 REG_OUTPUT_STATUS = 0x1010        # DO terminals, bit 0 = DO1
 POSITION_COMPLETE_BIT = 0         # DO1 when P3-20 = 16; the manual says watch it *change*
