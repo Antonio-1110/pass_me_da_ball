@@ -34,6 +34,10 @@ launcher_axis:
   backend: none             # stepper driver TBD -> virtual axis
 
 launcher:
+  arm_length_m: 0.70        # measured: pivot to ball centre
+  # No frame yet: the arm must never pass straight up (where it started on
+  # the bench). Raise this once a frame defines the real hard stop.
+  max_arm_angle_deg: 90
   # Must match the PS100's FA40 / FA41 (read back from the drive: 100).
   accel_ms_per_1000rpm: 100
   decel_ms_per_1000rpm: 100
