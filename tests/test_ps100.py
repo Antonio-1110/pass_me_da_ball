@@ -75,3 +75,76 @@ def test_launcher_fault_on_timeout():
     assert (R.REG_VIRTUAL_INPUT_CONTROL, R.CONTROL_POSITION_STOP) in t.writes
     launcher.reset()
     assert launcher.ready
+
+
+@pytest.mark.parametrize("name,address", [
+    ("PA21", 0x0015), ("PA24", 0x0018), ("PA50", 0x0032), ("PA65", 0x0041),
+    ("P3-31", 0x011F), ("P3-34", 0x0122), ("P4-2", 0x0202), ("P4-4", 0x0204),
+    ("fa14", 0x000E), ("P3-38", 0x0126), ("FC-0", 0x0100),
+])
+def test_param_address_matches_manual(name, address):
+    assert R.param_address(name) == address
+
+
+@pytest.mark.parametrize("bad", ["P5-1", "PA", "x14", "P3-x"])
+def test_param_address_rejects_unknown(bad):
+    with pytest.raises(ValueError):
+        R.param_address(bad)
+
+
+def test_runtime_registers_follow_the_address_rule():
+    assert R.param_address("P3-31") == R.REG_VIRTUAL_INPUT_CONTROL
+    assert R.param_address("P4-2") == R.REG_POSITION_TURNS
+    assert R.param_address("P4-3") == R.REG_POSITION_PULSES
+    assert R.param_address("P4-4") == R.REG_POSITION_SPEED
+
+
+def test_check_settings_flags_mismatches():
+    drive, t = make()
+    for name, expected, _ in R.REQUIRED_SETTINGS:
+        t.registers[R.param_address(name)] = expected
+    t.registers[R.param_address("P3-38")] = 0
+    rows = {name: (expected, actual) for name, expected, actual, _ in drive.check_settings()}
+    assert rows["P3-38"] == (38, 0)
+    assert rows["PA14"] == (3, 3)
+    assert rows["PA40"][0] is None
+
+
+def test_check_settings_survives_unreadable_parameter():
+    class Flaky(SimTransport):
+        def read_register(self, address):
+            if address == R.param_address("PA74"):
+                raise IOError("no answer")
+            return super().read_register(address)
+
+    drive = PS100(Flaky(), PS100Config())
+    rows = {name: actual for name, _, actual, _ in drive.check_settings()}
+    assert rows["PA74"] is None
+    assert rows["PA4"] == 0
+
+
+def test_read_param_is_signed():
+    drive, t = make()
+    t.registers[R.param_address("P4-3")] = 0xFFFF
+    assert drive.read_param("P4-3") == -1
+
+
+def test_read_position_combines_words_low_first():
+    drive, t = make()
+    for i, w in enumerate([0x5678, 0x1234, 0, 0]):
+        t.registers[R.REG_ABS_POSITION_WORD_0 + i] = w
+    assert drive.read_position() == 0x12345678
+    for i in range(4):
+        t.registers[R.REG_ABS_POSITION_WORD_0 + i] = 0xFFFF
+    assert drive.read_position() == -1
+
+
+def test_cli_check_and_alarm(capsys):
+    from passer.tools import ps100_cli
+    ps100_cli.main(["--dry-run", "check"])
+    out = capsys.readouterr().out
+    assert "FIX PA14" in out and "setting(s) differ" in out
+    ps100_cli.main(["alarm", "57"])
+    assert "Modbus format error" in capsys.readouterr().out
+    ps100_cli.main(["--dry-run", "read", "P3-38"])
+    assert "0x0126" in capsys.readouterr().out
