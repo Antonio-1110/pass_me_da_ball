@@ -31,6 +31,7 @@ import time
 from typing import Iterable, Optional
 
 from .config import Config, apply_overrides, load_config
+from .homing import at_home
 from .players import PlayerStore, current_values, validate
 from .players import overrides as player_overrides
 from .controller import MachineController
@@ -92,6 +93,11 @@ class PassingMachine:
         """Start a session with the selected player's profile applied."""
         if self.ctl.session_active:
             return
+        if not self.cfg.app.dry_run:     # throws are planned from home: the arm must be there
+            ok, why = at_home(self.ctl.launcher.drive, self.cfg)
+            if not ok:
+                self.ctl._set_status(f"session not started: {why}", True)
+                return
         self.session_player = None
         pid = self.players.selected
         if pid:

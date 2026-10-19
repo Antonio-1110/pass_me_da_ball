@@ -7,7 +7,7 @@ from passer.kinematics import plan_launch
 from passer.launcher import Launcher, LauncherState
 
 
-def make(mode="change"):
+def make(mode="level"):
     t = SimTransport(move_time_s=0.01)
     return PS100(t, PS100Config(completion_mode=mode, completion_timeout_s=1.0)), t
 
@@ -31,6 +31,39 @@ def test_invalid_moves_rejected(turns, pulses, rpm):
     with pytest.raises(ValueError):
         drive.move(turns, pulses, rpm)
     assert t.writes == []
+
+
+def test_level_completion_waits_for_drop_then_rise():
+    """The bit starts at 1 (in position): finishing on its first change would end at the START."""
+    t = SimTransport(move_time_s=0.2)
+    drive = PS100(t, PS100Config(completion_timeout_s=1.0))
+    assert t.read_register(R.REG_OUTPUT_STATUS) & 1 == 1
+    t0 = __import__("time").monotonic()
+    assert drive.move(0, 100, 100)
+    assert __import__("time").monotonic() - t0 >= 0.2
+
+
+def test_level_completion_of_a_move_too_short_to_see():
+    class Instant(SimTransport):
+        def write_register(self, address, value):
+            super().write_register(address, value)
+            self.registers[R.REG_OUTPUT_STATUS] |= 1      # done before the first poll
+    drive = PS100(Instant(), PS100Config(completion_timeout_s=1.0))
+    assert drive.move(0, 100, 100, est_time_s=0.05)
+
+
+def test_timeout_scales_with_long_moves():
+    t = SimTransport(move_time_s=0.3)
+    drive = PS100(t, PS100Config(completion_timeout_s=0.05))
+    assert drive.move(0, 100, 30, est_time_s=0.3)        # 0.05 s alone would time out
+
+
+def test_reverse_direction_negates_the_move_only():
+    t = SimTransport(move_time_s=0.01)
+    drive = PS100(t, PS100Config(reverse_direction=True))
+    assert drive.move(2, 5000, 300)
+    assert t.writes[:3] == [(R.REG_POSITION_TURNS, -2), (R.REG_POSITION_PULSES, -5000),
+                            (R.REG_POSITION_SPEED, 300)]
 
 
 def test_completion_by_time():
@@ -105,7 +138,7 @@ def test_check_settings_flags_mismatches():
         t.registers[R.param_address(name)] = expected
     t.registers[R.param_address("P3-38")] = 0
     rows = {name: (expected, actual) for name, expected, actual, _ in drive.check_settings()}
-    assert rows["P3-38"] == (38, 0)
+    assert rows["P3-38"] == (28, 0)
     assert rows["PA14"] == (3, 3)
     assert rows["PA40"][0] is None
 
@@ -132,11 +165,42 @@ def test_read_param_is_signed():
 def test_read_position_combines_words_low_first():
     drive, t = make()
     for i, w in enumerate([0x5678, 0x1234, 0, 0]):
-        t.registers[R.REG_ABS_POSITION_WORD_0 + i] = w
+        t.registers[R.REG_ABS_POSITION + i] = w
     assert drive.read_position() == 0x12345678
     for i in range(4):
-        t.registers[R.REG_ABS_POSITION_WORD_0 + i] = 0xFFFF
+        t.registers[R.REG_ABS_POSITION + i] = 0xFFFF
     assert drive.read_position() == -1
+
+
+def test_position_is_read_in_one_request():
+    """Four separate reads can tear when the value wobbles around zero (-1 read as 2**32-1)."""
+    drive, t = make()
+    calls = []
+    real = t.read_registers
+    t.read_registers = lambda a, n: calls.append((a, n)) or real(a, n)
+    drive.read_position()
+    assert calls == [(R.REG_ABS_POSITION, 4)]
+
+
+def test_monitor_decodes_status_registers(capsys):
+    drive, t = make()
+    t.registers[R.REG_ALARM] = 57
+    t.registers[R.REG_POSITION_COMMAND] = 0xFFFE           # -2 across two words
+    t.registers[R.REG_POSITION_COMMAND + 1] = 0xFFFF
+    t.registers[R.REG_INPUT_STATUS] = 0b0001
+    rows = {addr: value for addr, _, value in drive.monitor()}
+    assert rows[R.REG_ALARM] == 57 and rows[R.REG_POSITION_COMMAND] == -2
+    assert rows[R.REG_INPUT_STATUS] == 1 and len(rows) == len(R.MONITOR)
+
+
+def test_cli_defaults_to_the_machine_config(tmp_path, monkeypatch, capsys):
+    """Without --config the tool must use the machine's file (direction reversal etc.)."""
+    from passer.tools import ps100_cli
+    (tmp_path / "configs").mkdir()
+    (tmp_path / "configs" / "rpi.yaml").write_text("ps100: {reverse_direction: true}\n")
+    monkeypatch.chdir(tmp_path)
+    ps100_cli.main(["--dry-run", "arm", "10", "--rpm", "30"])
+    assert "0x0203<--2778" in capsys.readouterr().out
 
 
 def test_cli_check_and_alarm(capsys):
@@ -148,3 +212,5 @@ def test_cli_check_and_alarm(capsys):
     assert "Modbus format error" in capsys.readouterr().out
     ps100_cli.main(["--dry-run", "read", "P3-38"])
     assert "0x0126" in capsys.readouterr().out
+    ps100_cli.main(["--dry-run", "monitor"])
+    assert "alarm (0 = none)" in capsys.readouterr().out

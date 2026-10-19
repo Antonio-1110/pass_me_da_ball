@@ -269,6 +269,12 @@ class LauncherConfig:
 @dataclass
 class PS100Config:
     port: str = "/dev/ttyUSB0"
+    # Moves are planned with + = arm toward the throw. True if the motor turns
+    # the arm the other way for a positive move (gearbox/mounting).
+    reverse_direction: bool = False
+    # Rotor angle (0x100D) with the arm exactly at home; see homing.py.
+    # None = not calibrated: LIVE sessions are refused.
+    home_rotor_counts: Optional[int] = None
     slave_id: int = 1
     baudrate: int = 9600
     parity: str = "N"
@@ -277,10 +283,12 @@ class PS100Config:
     # Some Modbus stacks/drives are 1-based; set to -1 if every register
     # read/write is off by one on the bench.
     address_offset: int = 0
-    # "change": completion when status bit 0 toggles vs. its pre-move value.
-    # "set":    completion when bit 0 reads 1.
-    # "time":   don't poll, just wait the estimated move time.
-    completion_mode: str = "change"
+    # "level": bit 0 of 0x1010 (DO1, P3-20 = 16) reads 1 while in position,
+    #          drops to 0 within ~80 ms of a start and returns to 1 when done
+    #          (measured on the drive). Done = seen 0, then 1.
+    # "time":  don't poll, just wait the estimated move time.
+    completion_mode: str = "level"
+    # Minimum wait; longer moves get 1.5 x their estimated time + 0.5 s.
     completion_timeout_s: float = 3.0
 
 

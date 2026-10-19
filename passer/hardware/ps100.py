@@ -2,7 +2,7 @@
 ps100.py
 
 PS100 servo drive control over Modbus RTU / RS-485 using relative-position
-single-segment mode (see PS100_RS485_CONFIGURATION.md).
+single-segment mode (see docs/ps100.md).
 
 One throw is:
 
@@ -24,7 +24,7 @@ from __future__ import annotations
 import logging
 import threading
 import time
-from typing import Dict, List, Optional, Protocol, Tuple
+from typing import Any, Dict, List, Optional, Protocol, Tuple
 
 from . import ps100_registers as R
 from ..config import PS100Config
@@ -35,6 +35,7 @@ log = logging.getLogger(__name__)
 class Transport(Protocol):
     def write_register(self, address: int, value: int) -> None: ...
     def read_register(self, address: int) -> int: ...
+    def read_registers(self, address: int, count: int) -> List[int]: ...
 
 
 class ModbusTransport:
@@ -71,20 +72,26 @@ class ModbusTransport:
                                             number_of_decimals=0,
                                             functioncode=3, signed=False)
 
+    def read_registers(self, address: int, count: int) -> List[int]:
+        """Consecutive registers in ONE request, so multi-word values don't tear."""
+        with self._lock:
+            return self._inst.read_registers(address + self._offset, count, functioncode=3)
+
 
 class SimTransport:
     """
     Fake drive. Records writes; on a 0 -> 1 edge of 0x011F it "moves" for
-    `move_time_s` and then toggles bit 0 of 0x1010, matching the manual's
-    "observe a change in bit 0" description.
+    `move_time_s`: bit 0 of 0x1010 reads 0 while moving and 1 once in
+    position, as measured on the real drive.
     """
 
     def __init__(self, move_time_s: float = 0.05):
-        self.registers: Dict[int, int] = {R.REG_OUTPUT_STATUS: 0,
+        self.registers: Dict[int, int] = {R.REG_OUTPUT_STATUS: 1 << R.POSITION_COMPLETE_BIT,
                                           R.REG_VIRTUAL_INPUT_CONTROL: 0}
         self.writes: List[Tuple[int, int]] = []
         self.move_time_s = move_time_s
         self._done_at: Optional[float] = None
+        self.rotor = 0     # encoder angle within one turn, like 0x100D
 
     def write_register(self, address: int, value: int) -> None:
         if not -32768 <= value <= 65535:
@@ -96,12 +103,31 @@ class SimTransport:
         if (address == R.REG_VIRTUAL_INPUT_CONTROL and prev == R.CONTROL_IDLE
                 and value == R.CONTROL_POSITION_TRIGGER):
             self._done_at = time.monotonic() + self.move_time_s
+            self.registers[R.REG_OUTPUT_STATUS] &= ~(1 << R.POSITION_COMPLETE_BIT)
+            pulses = (self.registers.get(R.REG_POSITION_TURNS, 0) * R.PULSES_PER_REV
+                      + self.registers.get(R.REG_POSITION_PULSES, 0))
+            self.set_rotor(self.rotor + round(pulses * R.ENCODER_COUNTS_PER_REV / R.PULSES_PER_REV))
+
+    def set_rotor(self, counts: int) -> None:
+        self.rotor = counts % R.ENCODER_COUNTS_PER_REV
+        self.registers[R.REG_ROTOR_ANGLE] = self.rotor & 0xFFFF
+        self.registers[R.REG_ROTOR_ANGLE + 1] = self.rotor >> 16
 
     def read_register(self, address: int) -> int:
         if self._done_at is not None and time.monotonic() >= self._done_at:
-            self.registers[R.REG_OUTPUT_STATUS] ^= 1 << R.POSITION_COMPLETE_BIT
+            self.registers[R.REG_OUTPUT_STATUS] |= 1 << R.POSITION_COMPLETE_BIT
             self._done_at = None
         return self.registers.get(address, 0)
+
+    def read_registers(self, address: int, count: int) -> List[int]:
+        return [self.read_register(address + i) for i in range(count)]
+
+
+def _words(words: List[int]) -> int:
+    """Signed value from 16-bit words, low word first."""
+    value = sum((w & 0xFFFF) << (16 * i) for i, w in enumerate(words))
+    bits = 16 * len(words)
+    return value - (1 << bits) if value >= 1 << (bits - 1) else value
 
 
 class PS100:
@@ -139,18 +165,28 @@ class PS100:
         as a signed 64-bit count. Raw encoder units: compare two readings
         to see whether, and which way, the motor moved.
         """
-        words = [self.t.read_register(R.REG_ABS_POSITION_WORD_0 + i) for i in range(4)]
-        value = sum((w & 0xFFFF) << (16 * i) for i, w in enumerate(words))
-        return value - (1 << 64) if value >= (1 << 63) else value
+        return _words(self.t.read_registers(R.REG_ABS_POSITION, 4))
+
+    def rotor_angle(self) -> int:
+        """Encoder angle within one motor revolution (0..131071), kept through power-off."""
+        return _words(self.t.read_registers(R.REG_ROTOR_ANGLE, 2) + [0])
+
+    def monitor(self) -> List[Tuple[int, str, int]]:
+        """Every status register (RS485 manual 1.5) from one read: (address, label, value)."""
+        start, end = R.MONITOR_SPAN
+        regs = self.t.read_registers(start, end - start)
+        return [(addr, label, _words(regs[addr - start:addr - start + n]))
+                for addr, n, label in R.MONITOR]
 
     def check_settings(self) -> List[Tuple[str, Optional[int], Optional[int], str]]:
         """
         Read every parameter the RS-485 move depends on.
-        Returns (name, expected or None, actual or None if unreadable, description).
+        Returns (name, expected, actual or None if unreadable, description), where
+        expected is a value, a tuple of acceptable values, or None (just report it).
         """
         wanted = [(n, e, w) for n, e, w in R.REQUIRED_SETTINGS]
         wanted += [(n, None, w) for n, w in R.INFO_SETTINGS]
-        rows: List[Tuple[str, Optional[int], Optional[int], str]] = []
+        rows: List[Tuple[str, Any, Optional[int], str]] = []
         for name, expected, what in wanted:
             try:
                 actual: Optional[int] = self.read_param(name)
@@ -169,6 +205,8 @@ class PS100:
             raise ValueError("turns and pulses must have the same sign")
         if abs(pulses) >= R.PULSES_PER_REV:
             raise ValueError(f"pulses {pulses} must be < {R.PULSES_PER_REV} per turn")
+        if self.cfg.reverse_direction:
+            turns, pulses = -turns, -pulses
         self.t.write_register(R.REG_POSITION_TURNS, self._check_i16("turns", turns))
         self.t.write_register(R.REG_POSITION_PULSES, self._check_i16("pulses", pulses))
         self.t.write_register(R.REG_POSITION_SPEED, self._check_i16("rpm", rpm))
@@ -192,25 +230,32 @@ class PS100:
         (per completion_mode) and return True on completion, False on timeout.
         """
         self.load_move(turns, pulses, rpm)
-        mode = self.cfg.completion_mode
-        before = self.status_bit() if mode == "change" else None
         log.info("PS100 move: turns=%d pulses=%d rpm=%d", turns, pulses, rpm)
         self.trigger()
         if not wait:
             return True
-        return self.wait_complete(before, est_time_s)
+        return self.wait_complete(est_time_s)
 
-    def wait_complete(self, before: Optional[int], est_time_s: Optional[float]) -> bool:
-        mode = self.cfg.completion_mode
-        if mode == "time":
+    def wait_complete(self, est_time_s: Optional[float]) -> bool:
+        """
+        Wait for the in-position bit to drop (moving) and come back (done).
+        A move too short to catch the drop counts as done once its
+        estimated time has passed with the bit still set.
+        """
+        if self.cfg.completion_mode == "time":
             time.sleep((est_time_s or 0.5) * 1.2 + 0.05)
             return True
-        deadline = time.monotonic() + self.cfg.completion_timeout_s
-        while time.monotonic() < deadline:
+        timeout = max(self.cfg.completion_timeout_s, 1.5 * (est_time_s or 0.0) + 0.5)
+        t0 = time.monotonic()
+        started = False
+        while time.monotonic() - t0 < timeout:
             bit = self.status_bit()
-            if (mode == "change" and bit != before) or (mode == "set" and bit == 1):
+            if not started:
+                started = bit == 0
+                if not started and est_time_s is not None and time.monotonic() - t0 >= est_time_s:
+                    return True
+            elif bit == 1:
                 return True
             time.sleep(0.01)
-        log.warning("PS100 move did not report completion within %.1fs",
-                    self.cfg.completion_timeout_s)
+        log.warning("PS100 move did not report completion within %.1fs", timeout)
         return False
