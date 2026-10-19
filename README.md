@@ -213,7 +213,7 @@ covering the distances you care about. Shots are logged to
 2. Distance: stand at 3 m and 6 m and compare with the preview. Adjust `distance.person_height_m` or `calibration.distance_scale`.
 3. `launcher.arm_length_m`, `pivot_height_m`, `home_angle_deg`, `max_arm_angle_deg`: measure these on the machine.
 4. `accel_ms_per_1000rpm` / `decel_ms_per_1000rpm`: copy them from the drive's FA40 / FA41.
-5. `ps100.completion_mode`: check how `0x1010` bit 0 behaves with `ps100_cli status` (see `docs/ps100.md`, "A move"). Use `time` if it is unreliable.
+5. `ps100.completion_mode`: `level` (default) matches how the drive's `0x1010` bit 0 behaves (see `docs/ps100.md`, "A move"). Use `time` if it is unreliable.
 6. Test with the arm unloaded, at low rpm and small sweeps first (`ps100_cli arm 10 --rpm 30`).
 
 ## Two-axis turret

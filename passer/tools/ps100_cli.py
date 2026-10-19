@@ -96,8 +96,8 @@ def main(argv=None):
         if ok:
             print("done")
         elif moved:
-            print("motor moved but no completion signal: check P3-20 = 16, "
-                  "or set ps100.completion_mode to 'time'")
+            print("motor moved but no completion signal: check P3-20 = 16 and "
+                  "completion_timeout_s (long slow moves), or use completion_mode 'time'")
         elif moved is False:
             print("motor did not move: run 'check' and look at the drive display for an alarm")
         else:

@@ -7,7 +7,7 @@ from passer.kinematics import plan_launch
 from passer.launcher import Launcher, LauncherState
 
 
-def make(mode="change"):
+def make(mode="level"):
     t = SimTransport(move_time_s=0.01)
     return PS100(t, PS100Config(completion_mode=mode, completion_timeout_s=1.0)), t
 
@@ -31,6 +31,31 @@ def test_invalid_moves_rejected(turns, pulses, rpm):
     with pytest.raises(ValueError):
         drive.move(turns, pulses, rpm)
     assert t.writes == []
+
+
+def test_level_completion_waits_for_drop_then_rise():
+    """The bit starts at 1 (in position): finishing on its first change would end at the START."""
+    t = SimTransport(move_time_s=0.2)
+    drive = PS100(t, PS100Config(completion_timeout_s=1.0))
+    assert t.read_register(R.REG_OUTPUT_STATUS) & 1 == 1
+    t0 = __import__("time").monotonic()
+    assert drive.move(0, 100, 100)
+    assert __import__("time").monotonic() - t0 >= 0.2
+
+
+def test_level_completion_of_a_move_too_short_to_see():
+    class Instant(SimTransport):
+        def write_register(self, address, value):
+            super().write_register(address, value)
+            self.registers[R.REG_OUTPUT_STATUS] |= 1      # done before the first poll
+    drive = PS100(Instant(), PS100Config(completion_timeout_s=1.0))
+    assert drive.move(0, 100, 100, est_time_s=0.05)
+
+
+def test_timeout_scales_with_long_moves():
+    t = SimTransport(move_time_s=0.3)
+    drive = PS100(t, PS100Config(completion_timeout_s=0.05))
+    assert drive.move(0, 100, 30, est_time_s=0.3)        # 0.05 s alone would time out
 
 
 def test_completion_by_time():
