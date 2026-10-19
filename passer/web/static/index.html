@@ -32,15 +32,22 @@ header h1 { font-size: 16px; margin: 0; letter-spacing: .2px; }
 .dot.on { background: var(--ok); }
 main { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr); gap: 16px; padding: 16px;
   max-width: 1500px; margin: 0 auto; }
-@media (max-width: 900px) { main { grid-template-columns: 1fr; padding: 12px; } }
+.settings { grid-column: 1 / -1; }
+#config { columns: 2; column-gap: 0; column-rule: 1px solid var(--border); }
+#config details.sec { break-inside: avoid; }
+@media (max-width: 900px) { main { grid-template-columns: 1fr; padding: 12px; } #config { columns: 1; } }
 section.card { background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
   box-shadow: var(--shadow); margin-bottom: 16px; overflow: hidden; }
 .card h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .6px; color: var(--muted);
   margin: 0; padding: 10px 14px; border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 8px; }
 .card .body { padding: 12px 14px; }
-.video { background: #000; aspect-ratio: 16 / 9; display: flex; align-items: center; justify-content: center; }
+.video { background: #000; aspect-ratio: 16 / 9; position: relative; }
 .video img { width: 100%; height: 100%; object-fit: contain; display: block; }
+.video .ph, .video .fault { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center;
+  justify-content: center; gap: 8px; padding: 16px; text-align: center; }
 .video .ph { color: #888; font-size: 13px; }
+.video .fault b { color: #ff6b6b; font-size: 18px; }
+.video .fault span { color: #bbb; font-size: 13px; max-width: 90%; overflow-wrap: anywhere; }
 .stats { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 10px; }
 .stat { background: var(--panel-2); border-radius: 8px; padding: 8px 10px; min-width: 0; }
 .stat .k { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .4px; }
@@ -92,6 +99,33 @@ details.sec[open] > summary::before { transform: rotate(90deg); }
 .flag.r { border-color: var(--warn); color: var(--warn); }
 .row .err { grid-column: 1 / -1; color: var(--bad); font-size: 12px; }
 .hidden { display: none !important; }
+.badge.on { background: var(--ok); color: #fff; }
+.badge.idle { background: var(--panel-2); color: var(--muted); border: 1px solid var(--border); }
+button.session { font-weight: 600; }
+#config.session-lock { pointer-events: none; opacity: .5; }
+.lock-note { color: var(--warn); font-weight: 600; font-size: 13px; padding-top: 0; }
+.modal { position: fixed; inset: 0; background: rgba(0,0,0,.45); display: flex; align-items: center;
+  justify-content: center; padding: 16px; z-index: 20; }
+.modal .box { background: var(--panel); color: var(--text); border: 1px solid var(--border); border-radius: 10px;
+  padding: 18px; width: 100%; max-width: 440px; box-shadow: 0 8px 30px rgba(0,0,0,.3); }
+.modal h3 { margin: 0 0 12px; font-size: 16px; }
+.modal .chg { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 6px 12px; font-size: 13px; }
+.modal .chg .k { color: var(--muted); }
+.modal code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; overflow-wrap: anywhere; }
+.modal .box { max-height: calc(100vh - 32px); overflow: auto; }
+.card h2 button { margin-left: auto; text-transform: none; letter-spacing: 0; font-weight: 600; }
+.prow { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: 8px; }
+.prow + .prow { margin-top: 4px; }
+.prow.sel { background: var(--accent-2); }
+.pinfo { flex: 1; min-width: 0; }
+.pname { font-weight: 600; }
+.psub { font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
+.pbtns { display: flex; gap: 6px; flex-shrink: 0; align-items: center; }
+.pf { display: grid; gap: 4px; margin-bottom: 10px; font-size: 13px; }
+.pf .u { color: var(--muted); font-size: 12px; }
+.pf input, .pf select { width: 100%; }
+.modal .sub { padding: 8px 0 6px; }
+.modal .btns { display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px; }
 #toast { position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%); background: var(--text); color: var(--bg);
   padding: 8px 14px; border-radius: 8px; font-size: 13px; opacity: 0; transition: opacity .2s; pointer-events: none;
   max-width: calc(100% - 32px); z-index: 10; }
@@ -110,14 +144,16 @@ details.sec[open] > summary::before { transform: rotate(90deg); }
 <header>
   <h1>Passer Control</h1>
   <span id="mode" class="badge dry">…</span>
+  <span id="session" class="badge idle">NO SESSION</span>
   <span class="conn"><span id="conn-dot" class="dot"></span><span id="conn-txt">connecting</span></span>
+  <button id="logout" class="small hidden">Log out</button>
 </header>
 
 <main>
   <div>
     <section class="card">
       <h2>Camera</h2>
-      <div class="video"><img id="video" alt="camera feed"><span id="video-ph" class="ph">waiting for camera…</span></div>
+      <div class="video"><img id="video" alt="camera feed"><span id="video-ph" class="ph">waiting for camera…</span><div id="fault" class="fault hidden"><b>⚠ Something went wrong</b><span id="fault-msg"></span></div></div>
     </section>
 
     <section class="card">
@@ -127,10 +163,13 @@ details.sec[open] > summary::before { transform: rotate(90deg); }
         <div class="msg" id="message"></div>
       </div>
     </section>
+  </div>
 
+  <div>
     <section class="card">
-      <h2>Actions <span id="fire-note" class="flag r hidden">firing disabled in LIVE</span></h2>
+      <h2>Actions <span id="fire-note" class="flag r hidden"></span></h2>
       <div class="body actions">
+        <button id="session-btn" class="session" data-action="session_start">Start session</button>
         <button class="primary fire" data-action="chest">Chest pass</button>
         <button class="primary fire" data-action="lob">Lob</button>
         <button class="fire" data-action="pass_left">Pass left</button>
@@ -139,9 +178,7 @@ details.sec[open] > summary::before { transform: rotate(90deg); }
         <button data-action="reset">Reset fault</button>
       </div>
     </section>
-  </div>
 
-  <div>
     <section class="card">
       <h2>Launch preview <span class="flag">uses current settings</span></h2>
       <div class="body">
@@ -156,18 +193,34 @@ details.sec[open] > summary::before { transform: rotate(90deg); }
       </div>
     </section>
 
-    <section class="card">
-      <h2>Settings</h2>
-      <div class="body cfg-tools">
-        <input id="filter" type="text" placeholder="Filter settings (e.g. speed, arm, lead)">
-        <button id="save" class="primary">Save</button>
+    <section class="card players">
+      <h2>Players <button id="player-new" class="small">+ New player</button></h2>
+      <div class="body">
+        <div class="msg" style="margin:0 0 8px">Next session uses: <b id="player-next">machine settings</b></div>
+        <div id="players"></div>
       </div>
-      <div class="body" style="padding-top:0"><span class="msg" id="save-note" style="margin:0"></span></div>
-      <div id="config"></div>
     </section>
   </div>
+
+  <section class="card settings">
+    <h2>Settings</h2>
+    <div class="body cfg-tools">
+      <input id="filter" type="text" placeholder="Filter settings (e.g. speed, arm, lead)">
+      <button id="save" class="primary">Save</button>
+    </div>
+    <div class="body" style="padding-top:0"><span class="msg" id="save-note" style="margin:0"></span></div>
+    <div id="lock-note" class="body lock-note hidden">Settings are locked while a session is running. End the session to change them.</div>
+    <div id="config"></div>
+  </section>
 </main>
 <div id="toast"></div>
+<div id="modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+  <div class="box">
+    <h3 id="modal-title"></h3>
+    <div id="modal-body"></div>
+    <div class="btns"><button id="modal-no">Cancel</button><button id="modal-yes" class="primary">Apply</button></div>
+  </div>
+</div>
 
 <script>
 "use strict";
@@ -192,10 +245,30 @@ async function api(path, body) {
   const opt = body === undefined ? {} :
     { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) };
   const r = await fetch(path, opt);
+  if (r.status === 401) { location.reload(); throw new Error("logged out"); }
   const j = await r.json().catch(() => ({ ok: false, error: r.statusText }));
   if (!r.ok) throw new Error(j.error || j.message || r.statusText);
   return j;
 }
+
+function confirmDialog(title, html, yes = "Apply") {
+  return new Promise(resolve => {
+    const m = $("#modal");
+    $("#modal-title").textContent = title;
+    $("#modal-body").innerHTML = html;
+    $("#modal-yes").textContent = yes;
+    m.classList.remove("hidden");
+    $("#modal-no").focus();
+    const key = e => { if (e.key === "Escape") done(false); };
+    const done = ok => { m.classList.add("hidden"); document.removeEventListener("keydown", key); resolve(ok); };
+    $("#modal-yes").onclick = () => done(true);
+    $("#modal-no").onclick = () => done(false);
+    m.onclick = e => { if (e.target === m) done(false); };
+    document.addEventListener("keydown", key);
+  });
+}
+const liveWarn = () => lastStatus && !lastStatus.dry_run
+  ? `<div class="warn">LIVE mode: this affects the real machine.</div>` : "";
 
 /* ---------------- video ---------------- */
 function startVideo() {
@@ -214,6 +287,28 @@ function renderStatus(st) {
   const mode = $("#mode");
   mode.textContent = st.mode;
   mode.className = "badge " + (st.dry_run ? "dry" : "live");
+  $("#logout").classList.toggle("hidden", !st.login_required);
+  const ses = st.session || { active: false };
+  const mins = ses.active ? Math.floor(ses.seconds / 60) : 0;
+  $("#session").textContent = ses.active ? `SESSION ${mins}:${String(Math.floor(ses.seconds % 60)).padStart(2, "0")}`
+    + (ses.player ? ` · ${ses.player}` : "") : "NO SESSION";
+  $("#session").className = "badge " + (ses.active ? "on" : "idle");
+  const sb = $("#session-btn");
+  sb.dataset.action = ses.active ? "session_end" : "session_start";
+  sb.textContent = ses.active ? "End session" : "Start session";
+  sb.className = "session " + (ses.active ? "danger" : "primary");
+  sb.disabled = false;
+  $("#config").classList.toggle("session-lock", ses.active);
+  $("#lock-note").classList.toggle("hidden", !ses.active);
+  $("#fault").classList.toggle("hidden", !st.error);
+  if (st.error) {
+    $("#fault-msg").textContent = st.error;
+    $("#video-ph").classList.add("hidden");
+    $("#stats").innerHTML = "";
+    $("#message").textContent = "Fix the problem and restart the app.";
+    document.querySelectorAll("button.fire, #session-btn").forEach(b => b.disabled = true);
+    return;
+  }
   const p = st.player, g = st.gesture, t = st.turret;
   const speed = p.velocity ? Math.hypot(p.velocity[0], p.velocity[1]) : null;
   $("#stats").innerHTML = [
@@ -229,8 +324,9 @@ function renderStatus(st) {
     stat("Speed", fmt(st.infer_fps, 1, " fps"), `detect ${fmt(st.infer_ms, 0)} ms · gesture ${fmt(st.gesture_ms, 0)} ms`),
   ].join("");
   $("#message").textContent = st.message || "";
-  const allowed = st.fire_allowed;
+  const allowed = st.fire_allowed && ses.active;
   document.querySelectorAll("button.fire").forEach(b => b.disabled = !allowed);
+  $("#fire-note").textContent = !ses.active ? "start a session to throw" : "firing disabled in LIVE";
   $("#fire-note").classList.toggle("hidden", allowed);
 }
 
@@ -250,7 +346,18 @@ async function pollStatus() {
 document.querySelectorAll("[data-action]").forEach(b => b.addEventListener("click", async () => {
   const a = b.dataset.action;
   if (b.classList.contains("fire") && lastStatus && !lastStatus.dry_run &&
-      !confirm(`LIVE mode: really fire a ${a.replace("_", " ")}?`)) return;
+      !await confirmDialog("Fire?", `LIVE mode: really fire a ${esc(a.replace("_", " "))}?`, "Fire")) return;
+  if (a === "session_start") {
+    const opts = [`<option value="">Machine settings (no profile)</option>`].concat((PLAYERS?.players || []).map(p =>
+      `<option value="${esc(p.id)}" ${p.id === PLAYERS.selected ? "selected" : ""}>${esc(p.name || p.id)}</option>`));
+    const pick = PLAYERS ? `<label class="pf"><span>Player</span><select id="ses-player">${opts.join("")}</select></label>` : "";
+    if (!await confirmDialog("Start session?", pick +
+        "<div>Gestures will trigger throws, and settings are locked until the session ends.</div>" + liveWarn(), "Start")) return;
+    if (PLAYERS) {
+      try { await api("api/players/select", { id: $("#ses-player").value || null }); loadPlayers(); }
+      catch (e) { return toast(e.message, true); }
+    }
+  }
   try { const r = await api("api/action", { action: a }); toast(r.message || a); }
   catch (e) { toast(e.message, true); }
 }));
@@ -278,6 +385,90 @@ async function updatePlan() {
 }
 $("#plan-d").addEventListener("input", schedulePlan);
 $("#plan-p").addEventListener("change", updatePlan);
+
+/* ---------------- players ---------------- */
+let PLAYERS = null;   // {players, selected, fields, pass_fields, base}
+
+async function loadPlayers() {
+  try { PLAYERS = await api("api/players"); renderPlayers(); }
+  catch (e) { $("#players").innerHTML = `<div class="bad">${esc(e.message)}</div>`; }
+}
+
+function playerSummary(p) {
+  const parts = [];
+  if (p.person_height_m != null) parts.push(`${fmt(p.person_height_m, 2, " m")} tall`);
+  if (p.lead_m != null) parts.push(`lead ${fmt(p.lead_m, 1, " m")}`);
+  for (const [n, v] of Object.entries(p.passes || {}))
+    parts.push(`${n}: ` + [v.launch_angle_deg != null ? fmt(v.launch_angle_deg, 0, "°") : "",
+                           v.target_height_m != null ? `catch ${fmt(v.target_height_m, 2, " m")}` : ""].filter(Boolean).join(", "));
+  return parts.join(" · ") || "uses the machine's settings";
+}
+
+function renderPlayers() {
+  const sel = PLAYERS.selected;
+  const row = (id, name, sub, extra) => `<div class="prow ${id === sel ? "sel" : ""}">
+      <div class="pinfo"><div class="pname">${esc(name)}</div><div class="psub">${esc(sub)}</div></div>
+      <div class="pbtns">${id === sel ? `<span class="flag">next session</span>`
+        : `<button class="small" data-pselect="${esc(id ?? "")}">Use</button>`}${extra}</div></div>`;
+  $("#players").innerHTML = row(null, "Machine settings", "no player profile", "") + PLAYERS.players.map(p =>
+    row(p.id, p.name || p.id, playerSummary(p),
+        `<button class="small" data-pedit="${esc(p.id)}">Edit</button><button class="small" data-pdel="${esc(p.id)}">Delete</button>`)).join("");
+  const cur = PLAYERS.players.find(p => p.id === sel);
+  $("#player-next").textContent = cur ? (cur.name || cur.id) : "machine settings";
+}
+
+function numField(id, f, value, machine) {
+  return `<label class="pf"><span>${esc(f.label)} <span class="u">${esc(f.unit)}, ${f.min}–${f.max}</span></span>
+    <input id="${id}" type="number" step="any" min="${f.min}" max="${f.max}" value="${esc(value ?? "")}"
+      placeholder="machine: ${esc(machine)}"></label>`;
+}
+
+async function editPlayer(p, draft) {
+  const F = PLAYERS.fields, PF = PLAYERS.pass_fields, base = PLAYERS.base, v = draft || p || {};
+  let html = `<label class="pf"><span>Name</span><input id="pe-name" type="text" maxlength="40" value="${esc(v.name ?? "")}"></label>`;
+  for (const [k, f] of Object.entries(F)) html += numField(`pe-${k}`, f, v[k], base[k]);
+  for (const [pn, bv] of Object.entries(base.passes)) {
+    html += `<div class="sub">${esc(pn)} pass</div>`;
+    for (const [k, f] of Object.entries(PF)) html += numField(`pe-${pn}-${k}`, f, v.passes?.[pn]?.[k], bv[k]);
+  }
+  html += `<div class="msg">Leave a field empty to use the machine's setting. Changes apply from the next session.</div>`;
+  if (!await confirmDialog(p ? `Edit ${p.name || p.id}` : "New player", html, "Save")) return;
+  const num = id => { const x = $(id).value.trim(); return x === "" ? null : Number(x); };
+  const body = { name: $("#pe-name").value.trim(), passes: {} };
+  if (p) body.id = p.id;
+  for (const k of Object.keys(F)) body[k] = num(`#pe-${k}`);
+  for (const pn of Object.keys(base.passes)) {
+    body.passes[pn] = {};
+    for (const k of Object.keys(PF)) body.passes[pn][k] = num(`#pe-${pn}-${k}`);
+  }
+  try {
+    const r = await api("api/players", body);
+    toast(`saved ${r.player.name}`);
+    await loadPlayers();
+  } catch (e) {
+    toast(e.message, true);
+    editPlayer(p, body);     // reopen with what was typed
+  }
+}
+
+$("#player-new").addEventListener("click", () => PLAYERS && editPlayer(null));
+$("#players").addEventListener("click", async e => {
+  const b = e.target.closest("button");
+  if (!b) return;
+  try {
+    if (b.dataset.pselect !== undefined) {
+      await api("api/players/select", { id: b.dataset.pselect || null });
+    } else if (b.dataset.pedit) {
+      return editPlayer(PLAYERS.players.find(p => p.id === b.dataset.pedit));
+    } else if (b.dataset.pdel) {
+      const p = PLAYERS.players.find(x => x.id === b.dataset.pdel);
+      if (!await confirmDialog("Delete player?", `Delete <b>${esc(p.name || p.id)}</b>'s profile? This can't be undone.`, "Delete")) return;
+      await api("api/players/delete", { id: p.id });
+      toast(`deleted ${p.name || p.id}`);
+    }
+    await loadPlayers();
+  } catch (err) { toast(err.message, true); }
+});
 
 /* ---------------- settings ---------------- */
 const TITLES = {
@@ -394,6 +585,11 @@ function countModified(path, obj, def) {
 
 async function send(pathStr, value, rowEl) {
   const path = pathStr.split(".");
+  const ok = await confirmDialog("Change setting?",
+    `<div class="chg"><span class="k">Setting</span><code>${esc(pathStr)}</code>
+      <span class="k">From</span><code>${esc(JSON.stringify(get(CFG.values, path)))}</code>
+      <span class="k">To</span><code>${esc(JSON.stringify(value))}</code></div>` + liveWarn());
+  if (!ok) { renderConfig(); return; }     // puts the old value back in the field
   try {
     const r = await api("api/config", nest(path, value));
     CFG.values = r.values;
@@ -469,9 +665,15 @@ async function loadConfig() {
   }
 }
 
+$("#logout").addEventListener("click", async () => {
+  try { await api("api/logout", {}); } catch (e) { /* reload shows the login page either way */ }
+  location.reload();
+});
+
 startVideo();
 pollStatus();
 loadConfig();
+loadPlayers();
 </script>
 </body>
 </html>

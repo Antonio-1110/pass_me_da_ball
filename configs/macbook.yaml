@@ -24,3 +24,6 @@ launcher_axis:
 app:
   dry_run: true
   headless: false
+
+web:
+  password: "changeme"      # dashboard login -- change this

@@ -33,9 +33,17 @@ camera_axis:
 launcher_axis:
   backend: none             # stepper driver TBD -> virtual axis
 
+launcher:
+  # Must match the PS100's FA40 / FA41 (read back from the drive: 100).
+  accel_ms_per_1000rpm: 100
+  decel_ms_per_1000rpm: 100
+
 ps100:
   port: /dev/ttyUSB0        # or a stable /dev/serial/by-id/... path
 
 app:
   dry_run: true
   headless: true
+
+web:
+  password: "changeme"      # dashboard login -- change this

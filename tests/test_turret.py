@@ -179,7 +179,9 @@ def make_controller(**lau):
     turret = make_turret(**lau)
     transport = SimTransport(move_time_s=0.01)
     launcher = Launcher(PS100(transport, cfg.ps100), cfg.launcher, reload_delay_s=0)
-    return MachineController(cfg, turret, launcher), transport
+    ctl = MachineController(cfg, turret, launcher)
+    ctl.start_session(0.0, "test")
+    return ctl, transport
 
 
 def test_controller_fires_lead_pass_at_moving_player():
@@ -212,3 +214,16 @@ def test_controller_refuses_without_distance_and_times_out():
     world.run(1.0, ctl)                                       # turret far too slow
     assert ctl.pending is None and "could not aim" in ctl.status
     assert transport.writes == []
+
+
+def test_no_throws_outside_a_session():
+    ctl, transport = make_controller()
+    world = World(ctl.turret, lambda t: (0.0, 5.0))
+    world.run(1.0, ctl)
+    ctl.end_session("test")
+    assert not ctl.request_shot(Gesture.CHEST, world.t) and "no session" in ctl.status
+    assert not ctl.request_shot(Gesture.SESSION, world.t)
+    ctl.toggle_session(world.t, "test")
+    assert ctl.session_active and ctl.request_shot(Gesture.CHEST, world.t)
+    ctl.end_session("test")
+    assert ctl.pending is None

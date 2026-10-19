@@ -53,14 +53,55 @@ python -m passer.app --config configs/macbook.yaml     # dry run: PS100 is simul
 ```
 
 **Raspberry Pi 5 + Camera Module 3:**
+Raspberry Pi OS:
 ```bash
 sudo apt install -y python3-picamera2 python3-opencv
 python3 -m venv --system-site-packages .venv && . .venv/bin/activate
 pip install -r requirements-pi.txt
-yolo export model=yolov8n.pt format=ncnn imgsz=320     # optional, 3-4x faster; then set detector.yolo_model
-python -m passer.app --config configs/rpi.yaml --headless          # dry run; dashboard on :8080
-python -m passer.app --config configs/rpi.yaml --headless --live   # REALLY moves the arm
 ```
+
+Ubuntu (no `python3-picamera2` package; Ubuntu's libcamera also lacks the Pi 5 pipeline, so build Raspberry Pi's fork and install picamera2 from pip):
+```bash
+sudo apt install -y git python3-pip python3-venv python3-dev build-essential pkg-config \
+    meson ninja-build cmake python3-yaml python3-ply python3-jinja2 libyaml-dev \
+    libssl-dev libdw-dev libunwind-dev libudev-dev libevent-dev libdrm-dev libjpeg-dev \
+    libpng-dev libcap-dev libgnutls28-dev openssl pybind11-dev libboost-dev python3-opencv
+sudo usermod -aG video $USER          # camera device access; log out/in afterwards
+# build outside this repo, with no venv active (meson must use the system python3 that has ply/yaml/jinja2)
+git clone https://github.com/raspberrypi/libcamera.git ~/src/libcamera
+meson setup ~/src/libcamera/build ~/src/libcamera --buildtype=release \
+    -Dpipelines=rpi/vc4,rpi/pisp -Dipas=rpi/vc4,rpi/pisp \
+    -Dv4l2=true -Dgstreamer=disabled -Dtest=false -Dlc-compliance=disabled \
+    -Dcam=enabled -Dqcam=disabled -Ddocumentation=disabled -Dpycamera=enabled
+ninja -C ~/src/libcamera/build
+sudo ninja -C ~/src/libcamera/build install
+# picamera2 also needs pykms (kms++), which Ubuntu doesn't package either
+git clone https://github.com/tomba/kmsxx.git ~/src/kmsxx
+meson setup ~/src/kmsxx/build ~/src/kmsxx --buildtype=release \
+    -Dpykms=enabled -Domap=disabled -Dkmscube=false -Dutils=false
+ninja -C ~/src/kmsxx/build
+sudo ninja -C ~/src/kmsxx/build install
+sudo ldconfig                         # separate line: run it even if an install step complains
+python3 -m venv --system-site-packages .venv && . .venv/bin/activate
+# if `python -c "import libcamera, pykms"` fails, point the venv at the installed bindings:
+#   printf '%s\n' /usr/local/lib/python3/dist-packages \
+#       /usr/local/lib/aarch64-linux-gnu/python3.12/site-packages \
+#       > .venv/lib/python3.12/site-packages/libcamera.pth
+pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu   # else pip pulls GBs of NVIDIA CUDA wheels
+pip install -r requirements-pi.txt picamera2
+python -c "from picamera2 import Picamera2; print(Picamera2.global_camera_info())"   # [] until a camera is connected
+cam -l                                  # libcamera's own camera list
+```
+If you'd rather skip the build, use a USB webcam instead: set `camera.backend: opencv` in `configs/rpi.yaml` and run `python -m passer.tools.list_cameras` to find the index.
+
+Then, on either OS:
+```bash
+yolo export model=yolov8n.pt format=ncnn imgsz=320     # optional, 3-4x faster; then set detector.yolo_model
+./run.sh            # dry run; dashboard on :8080 (= python -m passer.app --config configs/rpi.yaml --headless)
+./run.sh --live     # REALLY moves the arm; asks you to confirm the area is clear
+./stop.sh           # stop it from another terminal (clean shutdown, force only if it hangs)
+```
+While LIVE, the dashboard locks the hard limits and geometry (max rpm, arm angles, gear ratio, turret limits, trigger guards); set those in dry run.
 
 Other flags: `--video clip.mp4` replays a recording through the whole stack.
 Preview keys: `q` quit, `c` / `b` manual chest / lob, `r` clear a launcher fault, `s` stop the drive.
@@ -76,12 +117,17 @@ it from a phone or laptop on the same network. `--port` changes the port and
 - **Camera:** live view with the player box, gesture crop and skeleton. Frames are only drawn and encoded while someone is watching.
 - **Status:** distance, bearing and speed, gesture progress, both turret axes, arm state, frame rates.
 - **Launch preview:** pick a distance and pass type to see ball speed, motor rpm, register values and warnings, computed with the current settings.
-- **Settings:** every config value, with help text taken from `config.py`. Changes apply to the running machine straight away and are type-checked (a bad value is rejected and nothing is half-applied). Changed values are highlighted, with a reset to default. **Save** writes everything that differs from the defaults to `configs/live.yaml`; start with `--config configs/live.yaml` to reuse it.
+- **Login:** set `web.password` (the configs ship with `changeme`; change it). Until you log in, the server sends only the login page and refuses every API call.
+- **Sessions:** the machine only throws during a session. Start or end one from the dashboard, or by holding your forearms crossed in an X in front of your chest (see Gestures). Outside a session it tracks but ignores throw gestures. With `--no-web` a session starts automatically.
+- **Players:** per-player profiles (height, side-pass lead, and arc and catch height for each pass type), stored as `configs/players/<name>.yaml`. Pick the player when starting a session; their profile applies for that session and the machine's own values come back when it ends. The crossed-arms gesture uses the last picked player. Profiles can only set those fields, within safe ranges, never the hard limits.
+- **Settings:** every config value, with help text taken from `config.py`. Each change asks for confirmation, then applies to the running machine straight away and is type-checked (a bad value is rejected and nothing is half-applied). Changed values are highlighted, with a reset to default. **Save** writes everything that differs from the defaults to `configs/live.yaml` (never `app.dry_run` or other command-line flags); start with `PASSER_CONFIG=configs/live.yaml ./run.sh` to reuse it.
+  - All settings are **locked while a session is running**.
+  - In LIVE mode, the hard limits and geometry (max rpm, arm angles, gear ratio, turret limits, trigger guards) are locked even outside a session; set them in dry run.
   - Settings read only at startup (camera resolution, model files, serial port, axis backends) show a **restart** tag.
   - `app.dry_run` and the dashboard's own safety settings are **locked**: switching to LIVE is done on the machine with `--live`.
-- **Actions:** chest, lob, pass left/right, stop drive, reset fault. The fire buttons only work in dry run, unless `web.allow_fire_live: true` is set in the config file. They also ask for confirmation in LIVE. Stop always works.
+- **Actions:** start/end session, chest, lob, pass left/right, stop drive, reset fault. The fire buttons need a running session, and only work in dry run unless `web.allow_fire_live: true` is set in the config file. They also ask for confirmation in LIVE. Stop always works.
 
-**Security:** there is no login, so anyone who can reach the port can change settings. Keep the Pi on a private network or set `web.token`, then open `/?token=...` once. The server only accepts JSON POSTs, which stops other websites from triggering actions through your browser.
+**Security:** the login is a plain password over HTTP, so keep the Pi on a private network too. With an empty `web.password` there is no login at all. The server only accepts JSON POSTs, which stops other websites from triggering actions through your browser.
 
 ## Gestures
 
@@ -91,11 +137,13 @@ it from a phone or laptop on the same network. `--port` changes the port and
 | Left arm out sideways (~90°), right arm down | any (pose fallback) | **Pass left**: lead pass to the player's left |
 | Right arm out sideways, left arm down | any | **Pass right** |
 | Both arms straight up above the head | any | **High-arc lob** |
+| Forearms crossed in an X in front of the chest, held ~1 s | any | **Start / end a session** (not a throw) |
 
 Left and right are the **player's** own sides. Inference always runs on the
 unmirrored image; `camera.mirror_display` only flips the preview. A gesture has
-to hold for `gesture.confirm_count` gesture ticks. After that, one held gesture
-gives one pass.
+to hold for `gesture.confirm_count` gesture ticks (`session_confirm_count` for
+the session gesture, so it takes a longer hold). After that, one held gesture
+gives one pass. Throw gestures only work during a session.
 
 At 6–8 m the hands are only a few pixels wide in the 640 px detection frame. So
 the hand model gets a crop taken from the full-resolution frame around the

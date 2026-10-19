@@ -72,9 +72,9 @@ class CameraSource:
 
 class Picamera2Source(CameraSource):
     """
-    Raspberry Pi camera via libcamera/picamera2 (install with apt:
-    `sudo apt install python3-picamera2`, and create the venv with
-    --system-site-packages so it is visible).
+    Raspberry Pi camera via libcamera/picamera2 (Pi OS: apt python3-picamera2;
+    Ubuntu: build Raspberry Pi's libcamera fork + pip install picamera2, see README;
+    create the venv with --system-site-packages so system bindings are visible).
 
     The ISP produces the main and lores streams simultaneously from the same
     sensor readout, so the lores stream is free (no CPU resize) and the two

@@ -13,7 +13,8 @@ Control loop (~30 Hz, main thread), see controller.py:
   2. camera servo keeps the player centred; launcher turret leads the
      player's predicted position
   3. when a confirmed gesture arrives: aim at the predicted catch point,
-     fire once the launcher is on target
+     fire once the launcher is on target (only during a session; crossed
+     forearms, or the dashboard, start and end one)
   4. draw the debug view (unless headless)
 
 Keys in the preview window:
@@ -25,9 +26,13 @@ from __future__ import annotations
 import argparse
 import logging
 import queue
+import signal
 import time
+from typing import Iterable, Optional
 
-from .config import Config, load_config
+from .config import Config, apply_overrides, load_config
+from .players import PlayerStore, current_values, validate
+from .players import overrides as player_overrides
 from .controller import MachineController
 from .vision.gestures import Gesture
 
@@ -35,7 +40,8 @@ log = logging.getLogger("passer")
 
 
 class PassingMachine:
-    def __init__(self, cfg: Config):
+    def __init__(self, cfg: Config, cli_paths: Iterable[str] = ()):
+        """cli_paths: config paths set by command-line flags (never saved by the dashboard)."""
         from .vision.camera import CameraThread, make_camera_source
         from .vision.detection import make_person_detector
         from .vision.pipeline import GestureModels, VisionPipeline
@@ -46,12 +52,17 @@ class PassingMachine:
                                        make_person_detector(cfg.detector),
                                        GestureModels(cfg))
         self.ctl = MachineController.from_config(cfg)
+        self.players = PlayerStore(cfg.app.players_dir)
+        self._player_restore: Optional[dict] = None   # config values to put back at session end
+        self.session_player: Optional[str] = None
         self.actions: "queue.Queue[str]" = queue.Queue()
         self._status: dict = {}
         self.web = None
         if cfg.web.enabled:
             from .web.server import WebServer
-            self.web = WebServer(cfg, lambda: self._status, self._web_action)
+            self.web = WebServer(cfg, lambda: self._status, self._web_action,
+                                 in_session=lambda: self.ctl.session_active,
+                                 save_exclude=cli_paths, players=self.players)
 
     # -- dashboard ---------------------------------------------------------
     def _web_action(self, name: str):
@@ -71,13 +82,46 @@ class PassingMachine:
                 self.ctl.request_shot(shots[name], now)
             elif name == "reset":
                 self.ctl.launcher.reset()
+            elif name == "session_start":
+                self._start_session(now, "dashboard")
+            elif name == "session_end":
+                self._end_session("dashboard")
+
+    # -- sessions ----------------------------------------------------------
+    def _start_session(self, now: float, source: str) -> None:
+        """Start a session with the selected player's profile applied."""
+        if self.ctl.session_active:
+            return
+        self.session_player = None
+        pid = self.players.selected
+        if pid:
+            try:
+                player = validate(self.players.get(pid) or {}, list(self.cfg.launcher.profiles))
+                patch = player_overrides(player)
+                self._player_restore = current_values(self.cfg, patch)
+                apply_overrides(self.cfg, patch)
+                self.session_player = player["name"]
+            except Exception as e:
+                log.warning("Player %s not applied (%s): using the machine's settings", pid, e)
+        self.ctl.start_session(now, source + (f", player {self.session_player}"
+                                              if self.session_player else ""))
+
+    def _end_session(self, source: str) -> None:
+        self.ctl.end_session(source)
+        if self._player_restore:
+            apply_overrides(self.cfg, self._player_restore)
+            self._player_restore = None
+        self.session_player = None
 
     def _status_dict(self, st, now: float) -> dict:
         t, g = self.ctl.turret, self.cfg.gesture
         est = t.estimator.state_at(now)
+        progress = st.gesture_progress[0]
         return {
             "mode": "DRY RUN" if self.cfg.app.dry_run else "LIVE",
             "dry_run": self.cfg.app.dry_run,
+            "session": {"active": self.ctl.session_active, "player": self.session_player,
+                        "seconds": now - self.ctl.session_started if self.ctl.session_active else None},
             "camera_fps": self.camera.fps,
             "infer_fps": st.infer_fps, "infer_ms": st.infer_ms, "gesture_ms": st.gesture_ms,
             "player": {
@@ -92,7 +136,8 @@ class PassingMachine:
                 "raw": st.gesture.value, "hand": st.hand_gesture.value, "pose": st.pose_gesture.value,
                 "progress": st.gesture_progress[0].value, "progress_count": st.gesture_progress[1]
                 if st.gesture_progress[0] is not Gesture.NONE else 0,
-                "confirm_count": g.confirm_count,
+                "confirm_count": g.session_confirm_count if progress is Gesture.SESSION
+                else g.confirm_count,
             },
             "turret": {
                 "launcher_deg": t.launcher.angle(), "launcher_target_deg": t.launcher_target,
@@ -114,7 +159,8 @@ class PassingMachine:
             else f"launcher {t.launcher.angle():+5.1f} deg",
             f"camera {t.camera.angle():+5.1f} deg (rel)  bearing "
             + (f"{t.last_bearing:+5.1f}" if t.last_bearing is not None else "--") + f"  {vel}",
-            f"arm {self.ctl.launcher.state.value}  {'DRY' if self.cfg.app.dry_run else 'LIVE'}",
+            f"arm {self.ctl.launcher.state.value}  {'DRY' if self.cfg.app.dry_run else 'LIVE'}"
+            f"  session {'ON' if self.ctl.session_active else 'off'}",
             self.ctl.status,
         ]
 
@@ -122,10 +168,25 @@ class PassingMachine:
     def run(self) -> None:
         import cv2
 
-        self.camera.start()
+        try:
+            self.camera.start()
+        except Exception as e:
+            if not self.web:
+                raise
+            log.exception("Camera failed to start")
+            self.web.start()
+            try:
+                self._show_fault(f"Camera failed to start: {e}")
+            except KeyboardInterrupt:
+                pass
+            finally:
+                self.shutdown()
+            return
         self.pipeline.start()
         if self.web:
             self.web.start()
+        else:   # no dashboard to start one from
+            self._start_session(time.monotonic(), "no dashboard")
         headless = self.cfg.app.headless
         last_status = 0.0
         drawn_id = -1
@@ -150,7 +211,13 @@ class PassingMachine:
 
                 cmd = self.pipeline.get_command()
                 if cmd is not None:
-                    self.ctl.request_shot(cmd[0], now)
+                    if cmd[0] is Gesture.SESSION:
+                        if self.ctl.session_active:
+                            self._end_session("gesture")
+                        else:
+                            self._start_session(now, "gesture")
+                    else:
+                        self.ctl.request_shot(cmd[0], now)
                 self._run_actions(now)
 
                 img = None
@@ -191,20 +258,50 @@ class PassingMachine:
                     self.ctl.launcher.reset()
                 elif key == ord("s"):
                     self.ctl.launcher.stop()
+            else:  # camera thread gave up (not a 'q' quit): can't see players any more
+                self._end_session("camera lost")
+                self._stop_drive("camera lost")
+                if self.web:
+                    self._show_fault("Camera stopped delivering frames (see the log)")
         except KeyboardInterrupt:
             pass
         finally:
             self.shutdown()
 
+    def _show_fault(self, message: str) -> None:
+        """Keep the dashboard up showing the error instead of exiting (Ctrl+C to quit)."""
+        log.error("%s -- dashboard stays up to show it. Ctrl+C to quit.", message)
+        self._status = {"mode": "DRY RUN" if self.cfg.app.dry_run else "LIVE",
+                        "dry_run": self.cfg.app.dry_run, "error": message}
+        while True:
+            time.sleep(0.5)
+
+    def _stop_drive(self, why: str) -> None:
+        try:
+            self.ctl.launcher.stop()
+            log.info("Drive stop sent (%s)", why)
+        except Exception:
+            log.exception("Drive stop FAILED (%s) -- use the emergency stop", why)
+
     def shutdown(self) -> None:
-        if self.web:
-            self.web.stop()
-        self.pipeline.stop()
-        self.camera.stop()
-        self.ctl.turret.close()
+        """Leave the machine safe: no session, drive stopped, then release everything."""
+        self._end_session("shutdown")
+        self._stop_drive("shutdown")
+        for step in ((self.web.stop if self.web else None), self.pipeline.stop,
+                     self.camera.stop, self.ctl.turret.close):
+            try:
+                if step:
+                    step()
+            except Exception:
+                log.exception("shutdown step failed")
         if not self.cfg.app.headless:
             import cv2
             cv2.destroyAllWindows()
+
+
+def _interrupt(signum, frame):
+    """SIGTERM (systemd, kill) and SIGHUP (SSH dropped) shut down like Ctrl+C."""
+    raise KeyboardInterrupt
 
 
 def parse_args(argv=None):
@@ -234,9 +331,15 @@ def main(argv=None) -> None:
     if args.port:
         overrides["web"]["port"] = args.port
     cfg = load_config(args.config, overrides)
+    from .web.server import _paths
+    cli_paths = _paths(overrides)   # flags, so the dashboard's Save never keeps them
     logging.basicConfig(level=cfg.app.log_level,
                         format="%(asctime)s %(levelname)-7s %(name)s: %(message)s")
-    PassingMachine(cfg).run()
+    machine = PassingMachine(cfg, cli_paths)
+    # after loading the models: MediaPipe's absl installs its own SIGTERM handler
+    signal.signal(signal.SIGTERM, _interrupt)
+    signal.signal(signal.SIGHUP, _interrupt)
+    machine.run()
 
 
 if __name__ == "__main__":

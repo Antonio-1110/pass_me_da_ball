@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Passer Control</title>
+<style>
+:root {
+  --bg: #f4f5f7; --panel: #ffffff; --text: #1b1f24; --muted: #5f6b7a; --border: #d9dee5;
+  --accent: #d9480f; --bad: #c92a2a; --input: #ffffff; --shadow: 0 1px 2px rgba(0,0,0,.06);
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #111418; --panel: #1a1f25; --text: #e6e9ed; --muted: #8b96a5; --border: #2d353f;
+    --accent: #ff7a3d; --bad: #ff6b6b; --input: #12161b; --shadow: none;
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 16px;
+  background: var(--bg); color: var(--text); font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+form { width: 100%; max-width: 340px; background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
+  box-shadow: var(--shadow); padding: 22px; display: flex; flex-direction: column; gap: 12px; }
+h1 { font-size: 18px; margin: 0; }
+p { margin: 0; color: var(--muted); font-size: 13px; }
+input { font: inherit; color: var(--text); background: var(--input); border: 1px solid var(--border);
+  border-radius: 6px; padding: 8px 10px; }
+button { font: inherit; border: 1px solid var(--accent); background: var(--accent); color: #fff;
+  padding: 8px 12px; border-radius: 7px; cursor: pointer; }
+button:disabled { opacity: .5; cursor: wait; }
+.err { color: var(--bad); font-size: 13px; min-height: 1.4em; }
+</style>
+</head>
+<body>
+<form id="login">
+  <h1>Passer Control</h1>
+  <p>Enter the dashboard password.</p>
+  <input id="pw" type="password" autocomplete="current-password" aria-label="password" autofocus required>
+  <button id="go" type="submit">Log in</button>
+  <div class="err" id="err" role="alert"></div>
+</form>
+<script>
+"use strict";
+document.getElementById("login").addEventListener("submit", async e => {
+  e.preventDefault();
+  const go = document.getElementById("go"), err = document.getElementById("err");
+  go.disabled = true; err.textContent = "";
+  try {
+    const r = await fetch("api/login", { method: "POST", headers: { "Content-Type": "application/json" },
+                                         body: JSON.stringify({ password: document.getElementById("pw").value }) });
+    if (r.ok) return location.reload();
+    const j = await r.json().catch(() => ({}));
+    err.textContent = j.error || r.statusText;
+  } catch (x) {
+    err.textContent = "cannot reach the machine";
+  }
+  go.disabled = false;
+  document.getElementById("pw").select();
+});
+</script>
+</body>
+</html>
