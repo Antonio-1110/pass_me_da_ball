@@ -2,6 +2,7 @@
 Bench tool for the PS100 over RS-485. Start with the arm unloaded / safe!
 
     python -m passer.tools.ps100_cli check                  # read every setting the move needs
+    python -m passer.tools.ps100_cli monitor                # mode, alarm, inputs, position command...
     python -m passer.tools.ps100_cli status
     python -m passer.tools.ps100_cli pos                    # encoder position (did it move?)
     python -m passer.tools.ps100_cli read 0x0204            # or a name: read P3-38
@@ -15,7 +16,7 @@ Add --dry-run to print the register writes without a drive attached, and
 --port /dev/ttyUSB1 etc. to override the config.
 
 Register meanings, alarm codes and a checklist for a move that fails are in
-PS100_RS485_CONFIGURATION.md (sections 13-16).
+docs/ps100.md.
 """
 
 import argparse
@@ -35,6 +36,7 @@ def main(argv=None):
     ap.add_argument("--dry-run", action="store_true")
     sub = ap.add_subparsers(dest="cmd", required=True)
     sub.add_parser("check", help="read every drive setting the RS-485 move depends on")
+    sub.add_parser("monitor", help="every status register: mode, alarm, inputs, position command...")
     sub.add_parser("status")
     sub.add_parser("pos", help="encoder absolute position (raw counts)")
     r = sub.add_parser("read")
@@ -65,6 +67,14 @@ def main(argv=None):
         bad = print_check(drive.check_settings())
         print(f"{bad} setting(s) differ from what the RS-485 move needs" if bad
               else "all required settings match")
+    elif args.cmd == "monitor":
+        for addr, label, value in drive.monitor():
+            note = ""
+            if addr == R.REG_ALARM and value:
+                note = f"  <-- {R.ALARM_CODES.get(value, 'not in the manual table')}"
+            elif addr in (R.REG_INPUT_STATUS, R.REG_OUTPUT_STATUS):
+                note = f"  ({value & 0xF:04b})"
+            print(f"0x{addr:04X}  {label:<40} {value}{note}")
     elif args.cmd == "status":
         v = drive.t.read_register(R.REG_OUTPUT_STATUS)
         print(f"0x{R.REG_OUTPUT_STATUS:04X} = 0x{v:04X} (bit0={v & 1})")
@@ -128,10 +138,11 @@ def print_check(rows) -> int:
             bad += expected is not None
         elif expected is None:
             mark, want = "    ", ""
-        elif actual == expected:
+        elif actual in (expected if isinstance(expected, tuple) else (expected,)):
             mark, want = "ok  ", ""
         else:
-            mark, want = "FIX ", f" (needs {expected})"
+            need = " or ".join(map(str, expected)) if isinstance(expected, tuple) else expected
+            mark, want = "FIX ", f" (needs {need})"
             bad += 1
         print(f"{mark}{name:<6} 0x{R.param_address(name):04X} = {actual}{want}  {what}")
     return bad

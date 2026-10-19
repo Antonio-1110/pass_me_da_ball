@@ -102,10 +102,10 @@ def test_runtime_registers_follow_the_address_rule():
 def test_check_settings_flags_mismatches():
     drive, t = make()
     for name, expected, _ in R.REQUIRED_SETTINGS:
-        t.registers[R.param_address(name)] = expected
+        t.registers[R.param_address(name)] = expected[0] if isinstance(expected, tuple) else expected
     t.registers[R.param_address("P3-38")] = 0
     rows = {name: (expected, actual) for name, expected, actual, _ in drive.check_settings()}
-    assert rows["P3-38"] == (38, 0)
+    assert rows["P3-38"] == ((28, 38), 0)
     assert rows["PA14"] == (3, 3)
     assert rows["PA40"][0] is None
 
@@ -132,11 +132,32 @@ def test_read_param_is_signed():
 def test_read_position_combines_words_low_first():
     drive, t = make()
     for i, w in enumerate([0x5678, 0x1234, 0, 0]):
-        t.registers[R.REG_ABS_POSITION_WORD_0 + i] = w
+        t.registers[R.REG_ABS_POSITION + i] = w
     assert drive.read_position() == 0x12345678
     for i in range(4):
-        t.registers[R.REG_ABS_POSITION_WORD_0 + i] = 0xFFFF
+        t.registers[R.REG_ABS_POSITION + i] = 0xFFFF
     assert drive.read_position() == -1
+
+
+def test_position_is_read_in_one_request():
+    """Four separate reads can tear when the value wobbles around zero (-1 read as 2**32-1)."""
+    drive, t = make()
+    calls = []
+    real = t.read_registers
+    t.read_registers = lambda a, n: calls.append((a, n)) or real(a, n)
+    drive.read_position()
+    assert calls == [(R.REG_ABS_POSITION, 4)]
+
+
+def test_monitor_decodes_status_registers(capsys):
+    drive, t = make()
+    t.registers[R.REG_ALARM] = 57
+    t.registers[R.REG_POSITION_COMMAND] = 0xFFFE           # -2 across two words
+    t.registers[R.REG_POSITION_COMMAND + 1] = 0xFFFF
+    t.registers[R.REG_INPUT_STATUS] = 0b0001
+    rows = {addr: value for addr, _, value in drive.monitor()}
+    assert rows[R.REG_ALARM] == 57 and rows[R.REG_POSITION_COMMAND] == -2
+    assert rows[R.REG_INPUT_STATUS] == 1 and len(rows) == len(R.MONITOR)
 
 
 def test_cli_check_and_alarm(capsys):
@@ -148,3 +169,5 @@ def test_cli_check_and_alarm(capsys):
     assert "Modbus format error" in capsys.readouterr().out
     ps100_cli.main(["--dry-run", "read", "P3-38"])
     assert "0x0126" in capsys.readouterr().out
+    ps100_cli.main(["--dry-run", "monitor"])
+    assert "alarm (0 = none)" in capsys.readouterr().out

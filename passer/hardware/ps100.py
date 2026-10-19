@@ -2,7 +2,7 @@
 ps100.py
 
 PS100 servo drive control over Modbus RTU / RS-485 using relative-position
-single-segment mode (see PS100_RS485_CONFIGURATION.md).
+single-segment mode (see docs/ps100.md).
 
 One throw is:
 
@@ -24,7 +24,7 @@ from __future__ import annotations
 import logging
 import threading
 import time
-from typing import Dict, List, Optional, Protocol, Tuple
+from typing import Any, Dict, List, Optional, Protocol, Tuple
 
 from . import ps100_registers as R
 from ..config import PS100Config
@@ -35,6 +35,7 @@ log = logging.getLogger(__name__)
 class Transport(Protocol):
     def write_register(self, address: int, value: int) -> None: ...
     def read_register(self, address: int) -> int: ...
+    def read_registers(self, address: int, count: int) -> List[int]: ...
 
 
 class ModbusTransport:
@@ -71,6 +72,11 @@ class ModbusTransport:
                                             number_of_decimals=0,
                                             functioncode=3, signed=False)
 
+    def read_registers(self, address: int, count: int) -> List[int]:
+        """Consecutive registers in ONE request, so multi-word values don't tear."""
+        with self._lock:
+            return self._inst.read_registers(address + self._offset, count, functioncode=3)
+
 
 class SimTransport:
     """
@@ -102,6 +108,16 @@ class SimTransport:
             self.registers[R.REG_OUTPUT_STATUS] ^= 1 << R.POSITION_COMPLETE_BIT
             self._done_at = None
         return self.registers.get(address, 0)
+
+    def read_registers(self, address: int, count: int) -> List[int]:
+        return [self.read_register(address + i) for i in range(count)]
+
+
+def _words(words: List[int]) -> int:
+    """Signed value from 16-bit words, low word first."""
+    value = sum((w & 0xFFFF) << (16 * i) for i, w in enumerate(words))
+    bits = 16 * len(words)
+    return value - (1 << bits) if value >= 1 << (bits - 1) else value
 
 
 class PS100:
@@ -139,18 +155,24 @@ class PS100:
         as a signed 64-bit count. Raw encoder units: compare two readings
         to see whether, and which way, the motor moved.
         """
-        words = [self.t.read_register(R.REG_ABS_POSITION_WORD_0 + i) for i in range(4)]
-        value = sum((w & 0xFFFF) << (16 * i) for i, w in enumerate(words))
-        return value - (1 << 64) if value >= (1 << 63) else value
+        return _words(self.t.read_registers(R.REG_ABS_POSITION, 4))
+
+    def monitor(self) -> List[Tuple[int, str, int]]:
+        """Every status register (RS485 manual 1.5) from one read: (address, label, value)."""
+        start, end = R.MONITOR_SPAN
+        regs = self.t.read_registers(start, end - start)
+        return [(addr, label, _words(regs[addr - start:addr - start + n]))
+                for addr, n, label in R.MONITOR]
 
     def check_settings(self) -> List[Tuple[str, Optional[int], Optional[int], str]]:
         """
         Read every parameter the RS-485 move depends on.
-        Returns (name, expected or None, actual or None if unreadable, description).
+        Returns (name, expected, actual or None if unreadable, description), where
+        expected is a value, a tuple of acceptable values, or None (just report it).
         """
         wanted = [(n, e, w) for n, e, w in R.REQUIRED_SETTINGS]
         wanted += [(n, None, w) for n, w in R.INFO_SETTINGS]
-        rows: List[Tuple[str, Optional[int], Optional[int], str]] = []
+        rows: List[Tuple[str, Any, Optional[int], str]] = []
         for name, expected, what in wanted:
             try:
                 actual: Optional[int] = self.read_param(name)

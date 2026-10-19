@@ -41,7 +41,8 @@ and sweep worked out from the distance to the catch point.
 | `passer/launcher.py` | Fire, return and reload cycle, on its own thread |
 | `passer/tools/` | `plan_pass`, `ps100_cli`, `list_cameras` |
 | `webcam tracker test/` | Original MacBook prototype (kept for reference) |
-| `PS100_RS485_CONFIGURATION.md` | Drive parameters, wiring and register notes |
+| `docs/ps100.md` | PS100 drive: wiring, settings, registers, alarm codes, bench status |
+| `docs/manuals/` | PS100 manuals (PDF, Chinese) |
 
 ## Quick start
 
@@ -212,7 +213,7 @@ covering the distances you care about. Shots are logged to
 2. Distance: stand at 3 m and 6 m and compare with the preview. Adjust `distance.person_height_m` or `calibration.distance_scale`.
 3. `launcher.arm_length_m`, `pivot_height_m`, `home_angle_deg`, `max_arm_angle_deg`: measure these on the machine.
 4. `accel_ms_per_1000rpm` / `decel_ms_per_1000rpm`: copy them from the drive's FA40 / FA41.
-5. `ps100.completion_mode`: check how `0x1010` bit 0 behaves with `ps100_cli status` (see the PS100 doc, §7). Use `time` if it is unreliable.
+5. `ps100.completion_mode`: check how `0x1010` bit 0 behaves with `ps100_cli status` (see `docs/ps100.md`, "A move"). Use `time` if it is unreliable.
 6. Test with the arm unloaded, at low rpm and small sweeps first (`ps100_cli arm 10 --rpm 30`).
 
 ## Two-axis turret
@@ -250,4 +251,4 @@ is).
 
 - Voice activation as an alternative trigger (see `webcam tracker test/note.txt`).
 - Driver for the launcher turret stepper(s) once the hardware is chosen.
-- Check on the hardware how the PS100 handles register writes during a move (PS100 doc §10).
+- Check on the hardware how the PS100 handles register writes during a move (`docs/ps100.md`).

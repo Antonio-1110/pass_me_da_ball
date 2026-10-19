@@ -1,13 +1,8 @@
-"""PS100 RS-485 / Modbus register constants.
+"""PS100 RS-485 / Modbus register map, from the manuals in docs/manuals/.
 
-Based on the supplied PS100/KS100 manuals for the intended use case:
-relative internal-position control over RS-485.
-
-Important:
-- The manuals document these hexadecimal register addresses, but do not
-  clearly specify whether a particular Modbus library requires an address
-  offset. Verify addressing on the actual drive before motion testing.
-- Register names here follow the functions described in the manuals.
+Addressing (group base + parameter number) and the REQUIRED_SETTINGS values
+were checked against the real drive; see docs/ps100.md. Scaling and
+gearbox maths live in kinematics.py / LauncherConfig, not here.
 """
 
 # ----------------------------
@@ -16,20 +11,6 @@ Important:
 
 DEFAULT_SLAVE_ID = 1
 DEFAULT_BAUDRATE = 9600
-DEFAULT_BYTESIZE = 8
-DEFAULT_PARITY = "N"
-DEFAULT_STOPBITS = 1
-
-# ----------------------------
-# Position scaling
-# ----------------------------
-
-# Corresponds to PA/FA11 = 10000 in the proposed configuration.
-PULSES_PER_REV = 10_000
-DEGREES_PER_REV = 360.0
-
-# Launch arm gearbox: the motor turns this many times per arm revolution.
-GEAR_RATIO = 10
 
 # ----------------------------
 # Runtime Modbus registers
@@ -51,36 +32,61 @@ REG_POSITION_PULSES = 0x0203
 # Manual states this value must be positive.
 REG_POSITION_SPEED = 0x0204
 
-# Status register used for virtual/output status.
-# With P3-20 configured as 16 (DO1 = internal positioning complete),
-# the manual says to observe bit 0 of this register for a state change.
-REG_OUTPUT_STATUS = 0x1010
-POSITION_COMPLETE_BIT = 0
+# Command pulses per motor revolution the code assumes (PA11, checked by `check`).
+PULSES_PER_REV = 10_000
 
 # ----------------------------
-# Optional absolute encoder registers
+# Status / monitoring registers (read-only; RS485 manual section 1.5)
 # ----------------------------
 
-# Absolute-position words, low word first.
-REG_ABS_POSITION_WORD_0 = 0x1018  # bits 15..0
-REG_ABS_POSITION_WORD_1 = 0x1019  # bits 31..16
-REG_ABS_POSITION_WORD_2 = 0x101A  # bits 47..32
-REG_ABS_POSITION_WORD_3 = 0x101B  # bits 63..48
+REG_MOTOR_SPEED = 0x1000
+REG_POSITION = 0x1001             # 2 words, low first: current position, pulses
+REG_POSITION_COMMAND = 0x1003     # 2 words: position command, pulses
+REG_POSITION_ERROR = 0x1005       # 2 words: following error, pulses
+REG_CONTROL_MODE = 0x1009         # same codes as PA4
+REG_INPUT_STATUS = 0x100F         # DI terminals, bit 0 = DI1 (virtual inputs show here too)
+REG_OUTPUT_STATUS = 0x1010        # DO terminals, bit 0 = DO1
+POSITION_COMPLETE_BIT = 0         # DO1 when P3-20 = 16; the manual says watch it *change*
+REG_BUS_VOLTAGE = 0x1012
+REG_ALARM = 0x1013                # current alarm number, 0 = none (codes in ALARM_CODES)
+REG_RUN_STATE = 0x1016
+REG_ABS_POSITION = 0x1018         # 4 words, low first: encoder absolute position (P3-37 = 0)
 
-# P3-34 register documented for encoder-coordinate clearing.
-REG_ENCODER_COORDINATE_CLEAR = 0x0122
+# (first register, words, label) for `ps100_cli monitor`, read in one request.
+MONITOR = [
+    (0x1000, 1, "motor speed, rpm"),
+    (0x1001, 2, "current position, pulses"),
+    (0x1003, 2, "position command, pulses"),
+    (0x1005, 2, "position error, pulses"),
+    (0x1007, 1, "motor torque"),
+    (0x1008, 1, "motor current"),
+    (0x1009, 1, "control mode (PA4 codes: 0 = position)"),
+    (0x100A, 1, "temperature"),
+    (0x100B, 1, "speed command"),
+    (0x100C, 1, "torque command"),
+    (0x100D, 2, "rotor position within one turn"),
+    (0x100F, 1, "input terminals DI4..DI1"),
+    (0x1010, 1, "output terminals DO4..DO1"),
+    (0x1011, 1, "encoder input signal"),
+    (0x1012, 1, "bus voltage"),
+    (0x1013, 1, "alarm (0 = none)"),
+    (0x1014, 1, "logic chip version"),
+    (0x1015, 1, "relay state"),
+    (0x1016, 1, "running state (codes not documented)"),
+    (0x1017, 1, "external voltage state"),
+    (0x1018, 4, "encoder absolute position"),
+]
+MONITOR_SPAN = (0x1000, 0x101C)   # [start, end): one read covers MONITOR
 
 # ----------------------------
 # Parameter addressing
 # ----------------------------
 
-# Every address the manuals give for a parameter follows one rule:
-# group base + parameter number (decimal). Checked against all documented
-# pairs: PA21 -> 0x0015, PA24 -> 0x0018, PA25 -> 0x0019, PA50 -> 0x0032,
-# PA64 -> 0x0040, PA65 -> 0x0041, P3-31 -> 0x011F, P3-34 -> 0x0122,
-# P4-2..P4-4 -> 0x0202..0x0204. Other parameters are inferred from it.
-# The PA group is shown as "FA" on some firmware; the quick manual's
-# "FC-n" input codes correspond to P3-n.
+# address = group base + parameter number (decimal), RS485 manual 1.4.
+# Confirmed on the drive. The PA group shows as "FA" on the panel, and the
+# quick manual's "FC-n" input codes are P3-n. Writing an address saves to
+# the drive's EEPROM; PA parameters also have a RAM-only copy at +0x0080
+# (manual 1.6). No RAM-only address is documented for P3/P4.
 PARAM_GROUP_BASE = {"PA": 0x0000, "FA": 0x0000, "P3": 0x0100, "FC": 0x0100,
                     "P4": 0x0200}
 
@@ -105,7 +111,9 @@ REQUIRED_SETTINGS = [
     ("PA14", 3, "position command source: 3 = internal position"),
     ("PA53", 1, "servo enable: 1 = forced on (no external enable wire)"),
     ("P3-30", 1, "virtual input terminals: 1 = controlled by 0x011F"),
-    ("P3-38", 38, "virtual DI1 function: 38 = internal-position start"),
+    # The RS-485 sections of the manual say 38; the push-button version of the
+    # same move uses 28 (next to stop = 27). Accept either until one is proven.
+    ("P3-38", (28, 38), "virtual DI1 function: internal-position start"),
     ("P3-39", 27, "virtual DI2 function: 27 = internal-position stop (software stop)"),
     ("P3-20", 16, "DO1 function: 16 = positioning complete (bit 0 of 0x1010)"),
     ("P4-0", 1, "internal-position mode: 1 = relative"),
@@ -117,6 +125,7 @@ REQUIRED_SETTINGS = [
 # Worth seeing when a move misbehaves; no single right value.
 INFO_SETTINGS = [
     ("PA20", "drive-prohibit inputs: 1 = ignored (0 can cause alarm 7)"),
+    ("PA22", "speed command source: 3 = panel jog setup; factory default 0"),
     ("PA23", "maximum motor speed, rpm"),
     ("PA40", "acceleration time, ms for 0 -> 1000 rpm"),
     ("PA41", "deceleration time, ms for 1000 -> 0 rpm"),
@@ -126,9 +135,8 @@ INFO_SETTINGS = [
     ("P4-4", "loaded move: speed, rpm"),
 ]
 
-# Alarm numbers shown on the drive display (quick manual, 报警代码 table).
-# The manuals give no Modbus register for the current alarm: read it on
-# the front panel.
+# Alarm numbers (quick manual, 报警代码 table): shown on the display and
+# readable from REG_ALARM.
 ALARM_CODES = {
     1: "overspeed: motor exceeded the speed limit",
     2: "main circuit overvoltage",
@@ -175,17 +183,3 @@ CONTROL_POSITION_TRIGGER = 0x0001
 # Optional stop function if P3-39 is configured as function 27.
 CONTROL_POSITION_STOP = 0x0002
 
-
-def degrees_to_pulses(degrees: float) -> int:
-    """Convert motor-shaft degrees to command pulses."""
-    return round(degrees / DEGREES_PER_REV * PULSES_PER_REV)
-
-
-def pulses_to_degrees(pulses: int) -> float:
-    """Convert command pulses to motor-shaft degrees."""
-    return pulses / PULSES_PER_REV * DEGREES_PER_REV
-
-
-def arm_degrees_to_pulses(arm_degrees: float, gear_ratio: float = GEAR_RATIO) -> int:
-    """Convert launch-arm degrees to motor command pulses through the gearbox."""
-    return round(arm_degrees / DEGREES_PER_REV * gear_ratio * PULSES_PER_REV)
