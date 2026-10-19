@@ -193,6 +193,16 @@ def test_monitor_decodes_status_registers(capsys):
     assert rows[R.REG_INPUT_STATUS] == 1 and len(rows) == len(R.MONITOR)
 
 
+def test_cli_defaults_to_the_machine_config(tmp_path, monkeypatch, capsys):
+    """Without --config the tool must use the machine's file (direction reversal etc.)."""
+    from passer.tools import ps100_cli
+    (tmp_path / "configs").mkdir()
+    (tmp_path / "configs" / "rpi.yaml").write_text("ps100: {reverse_direction: true}\n")
+    monkeypatch.chdir(tmp_path)
+    ps100_cli.main(["--dry-run", "arm", "10", "--rpm", "30"])
+    assert "0x0203<--2778" in capsys.readouterr().out
+
+
 def test_cli_check_and_alarm(capsys):
     from passer.tools import ps100_cli
     ps100_cli.main(["--dry-run", "check"])

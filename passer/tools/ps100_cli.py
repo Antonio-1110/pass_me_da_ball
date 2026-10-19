@@ -21,6 +21,7 @@ docs/ps100.md.
 
 import argparse
 import logging
+from pathlib import Path
 
 from ..config import load_config
 from ..hardware import ps100_registers as R
@@ -29,9 +30,16 @@ from ..kinematics import arm_degrees_to_motor_pulses, plan_launch, split_pulses
 from ..launcher import Launcher
 
 
+DEFAULT_CONFIG = "configs/rpi.yaml"
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser()
-    ap.add_argument("--config")
+    # The bench tool talks to the real machine, so default to its config: the
+    # built-in defaults lack e.g. reverse_direction and would swing the arm
+    # the wrong way.
+    ap.add_argument("--config", default=DEFAULT_CONFIG if Path(DEFAULT_CONFIG).is_file() else None,
+                    help=f"YAML config (default: {DEFAULT_CONFIG} if present)")
     ap.add_argument("--port")
     ap.add_argument("--dry-run", action="store_true")
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -59,6 +67,7 @@ def main(argv=None):
     logging.basicConfig(level=logging.DEBUG if args.dry_run else logging.INFO,
                         format="%(levelname)s %(message)s")
     cfg = load_config(args.config)
+    logging.info("config: %s", args.config or "built-in defaults")
     if args.port:
         cfg.ps100.port = args.port
     drive = PS100.from_config(cfg.ps100, dry_run=args.dry_run)
